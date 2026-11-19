@@ -2,10 +2,37 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // A ledger belongs to the authenticated UID in its path. The payload
-    // is a bounded JSON export. The revision coordinates concurrent edits.
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
+    // accessOwners/{uid}: assigned by the Firebase administrator only.
+    // accessInvites/{lowercaseEmail}: owner-managed {allowed: true}.
+    // users/{uid}/ledger/current: bounded JSON payload and integer revision.
+    function hasVerifiedEmail() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && request.auth.token.email_verified == true;
+    }
+
+    function isOwner() {
+      return hasVerifiedEmail()
+        && exists(/databases/$(database)/documents/accessOwners/$(request.auth.uid));
+    }
+
+    function isInvited(email) {
+      return exists(/databases/$(database)/documents/accessInvites/$(email))
+        && get(/databases/$(database)/documents/accessInvites/$(email)).data.allowed == true;
+    }
+
+    function canUseLedger(uid) {
+      return hasVerifiedEmail()
+        && request.auth.uid == uid
+        && (isOwner() || isInvited(request.auth.token.email.lower()));
+    }
+
+    function isValidInvite(email, invite) {
+      return email.size() <= 254
+        && email == email.lower()
+        && email.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$')
+        && invite.keys().hasOnly(['allowed'])
+        && invite.allowed == true;
     }
 
     function isValidLedger(ledger) {
@@ -17,12 +44,21 @@ service cloud.firestore {
         && ledger.payload.size() <= 700000;
     }
 
+    match /accessOwners/{uid} {
+      allow get: if hasVerifiedEmail() && request.auth.uid == uid;
+    }
+
+    match /accessInvites/{email} {
+      allow get: if hasVerifiedEmail() && request.auth.token.email.lower() == email;
+      allow create, update: if isOwner() && isValidInvite(email, request.resource.data);
+    }
+
     match /users/{uid}/ledger/current {
-      allow get: if isOwner(uid);
-      allow create: if isOwner(uid)
+      allow get: if canUseLedger(uid);
+      allow create: if canUseLedger(uid)
         && isValidLedger(request.resource.data)
         && request.resource.data.revision == 1;
-      allow update: if isOwner(uid)
+      allow update: if canUseLedger(uid)
         && isValidLedger(request.resource.data)
         && request.resource.data.revision == resource.data.revision + 1;
     }

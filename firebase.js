@@ -13,24 +13,26 @@
   const messages = {
     ar: {
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
-      signIn:'دخول بالبريد', create:'إنشاء حساب', phoneTitle:'الدخول بالجوال',
+      signIn:'دخول بالبريد', create:'إنشاء حساب', 
       share:'مشاركة MyLedger', recipient:'بريد الشخص المدعو', draft:'فتح رسالة الدعوة', copy:'نسخ رابط التطبيق',
       copied:'تم نسخ الرابط', subject:'جرّب MyLedger',
       invitation:'جرّب MyLedger لتسجيل مصاريفك. افتح الرابط وأنشئ حسابك الخاص:',
-      phone:'رقم الجوال بالصيغة الدولية', code:'رمز التحقق',
-      send:'إرسال الرمز', verify:'تأكيد', close:'إغلاق', pending:'جارٍ الاتصال بـ Firebase…',
-      sent:'أدخل رمز التحقق. لرقم الاختبار، استخدم الرمز المحفوظ في Firebase.',
+      close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'هذا البريد غير مدعو. جرّب بريدًا آخر.',
+      confirmEmail:'أكّد ملكية بريدك لمتابعة الدخول.', sendVerification:'إرسال رابط التأكيد',
+      verificationSent:'أرسلنا رابط التأكيد. افتحه ثم اضغط «تحقّق مجددًا».', checkAgain:'تحقّق مجددًا',
+      signOut:'استخدام حساب آخر', inviteFailed:'تعذّر إضافة البريد إلى قائمة السماح.', invited:'تم السماح لهذا البريد.',
       origin:'افتح التطبيق من رابط HTTPS معتمد، أو استخدم محاكيات Firebase محليًا.',
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
-      create:'Create account',phoneTitle:'Phone sign-in',share:'Share MyLedger',recipient:'Invitee email',
+      create:'Create account',share:'Share MyLedger',recipient:'Invitee email',
       draft:'Open invitation email',copy:'Copy app link',copied:'Link copied',subject:'Try MyLedger',
       invitation:'Try MyLedger to track your expenses. Open this link and create your own account:',
-      phone:'Phone number in international format',code:'Verification code',
-      send:'Send code',verify:'Verify',close:'Close',pending:'Connecting to Firebase…',
-      sent:'Enter the verification code. For a test phone number, use the code saved in Firebase.',
+      close:'Close',pending:'Checking access…',denied:'This email has no invitation. Try a different account.',
+      confirmEmail:'Verify your email address to continue.',sendVerification:'Send verification link',
+      verificationSent:'Open the link in your inbox, then select Check again.',checkAgain:'Check again',
+      signOut:'Use another account',inviteFailed:'Could not allow this email.',invited:'This email now has access.',
       origin:'Open the app on an authorized HTTPS origin or use the local Firebase emulators.',
       error:'Could not complete sign-in',out:'Could not sign out'
     }
@@ -39,7 +41,8 @@
   const emulator = ['localhost','127.0.0.1'].includes(location.hostname);
   const supported = location.protocol === 'https:' || (emulator && location.protocol === 'http:');
   let connection;
-  let verifier;
+  let ownerAccess;
+  let accessCheck = 0;
   let handling = false;
   let currentUser;
 
@@ -58,15 +61,9 @@
         authSdk.connectAuthEmulator(auth,'http://' + location.hostname + ':9099');
         store.connectFirestoreEmulator(database,location.hostname,8080);
       }
-      authSdk.onAuthStateChanged(auth,user => {
-        currentUser = user;
-        if (user && dialog.open) dialog.close();
-        window.dispatchEvent(new CustomEvent('myledger-account', {
-          detail: user ? ledgerAdapter(store,database,auth,user.uid) : null
-        }));
-        if (!user && !dialog.open) showSignInForm(messages[document.documentElement.lang] || messages.ar);
-      });
-      return {auth,authSdk};
+      const services = {auth,authSdk,store,database};
+      authSdk.onAuthStateChanged(auth,user => void checkAccess(services,user));
+      return services;
     }).catch(error => {
       connection = undefined;
       throw error;
@@ -74,10 +71,85 @@
     return connection;
   }
 
-  function ledgerAdapter(store,database,auth,uid) {
+  function accountChanged(detail) {
+    window.dispatchEvent(new CustomEvent('myledger-account',{detail}));
+  }
+
+  async function checkAccess(services,user) {
+    const {auth,store,database} = services;
+    const attempt = ++accessCheck;
+    currentUser = user;
+    ownerAccess = undefined;
+    accountChanged(null);
+    const copy = messages[document.documentElement.lang] || messages.ar;
+    if (!user) {
+      if (!dialog.open || !dialog.querySelector('#email-auth')) showSignInForm(copy);
+      return;
+    }
+    if (!user.emailVerified) {
+      showAccessStatus(copy,copy.confirmEmail,services,true);
+      return;
+    }
+    showAccessStatus(copy,copy.pending,services);
+    try {
+      const owner = await store.getDocFromServer(store.doc(database,'accessOwners',user.uid));
+      const email = user.email?.toLowerCase();
+      const invitation = !owner.exists() && email && !email.includes('/')
+        ? await store.getDocFromServer(store.doc(database,'accessInvites',email)) : null;
+      if (attempt !== accessCheck) return;
+      if (!owner.exists() && invitation?.data()?.allowed !== true) {
+        showAccessStatus(copy,copy.denied,services);
+        return;
+      }
+      if (owner.exists()) ownerAccess = {store,database};
+      if (dialog.open) dialog.close();
+      accountChanged(ledgerAdapter(store,database,auth,user.uid,owner.exists()));
+    } catch (error) {
+      if (attempt !== accessCheck) return;
+      showAccessStatus(copy,[copy.error,error.code].filter(Boolean).join(' · '),services,false,true);
+    }
+  }
+
+  function showAccessStatus(copy,text,services,unverified=false,retry=false) {
+    if (dialog.open) dialog.close();
+    dialog.classList.add('login-screen');
+    dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
+      <p id="phone-message" role="status"></p>
+      <div class="dialog-actions">
+        ${unverified ? `<button class="btn primary" id="send-verification">${copy.sendVerification}</button>` : ''}
+        ${unverified || retry ? `<button class="btn" id="retry-access">${copy.checkAgain}</button>` : ''}
+        <button class="btn" id="other-account">${copy.signOut}</button>
+      </div>`;
+    dialog.setAttribute('aria-labelledby','phone-title');
+    const status = dialog.querySelector('#phone-message');
+    status.textContent = text;
+    const {auth,authSdk} = services;
+    const user = auth.currentUser;
+    const onClick = (selector,work) => dialog.querySelector(selector)?.addEventListener('click',async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await work(); }
+      catch (error) { status.textContent = [copy.error,error.code].filter(Boolean).join(' · '); }
+      finally { button.disabled = false; }
+    });
+    onClick('#other-account',() => authSdk.signOut(auth));
+    onClick('#send-verification',async () => {
+      await authSdk.sendEmailVerification(user);
+      status.textContent = copy.verificationSent;
+    });
+    onClick('#retry-access',async () => {
+      await authSdk.reload(user);
+      await authSdk.getIdToken(user,true);
+      if (auth.currentUser?.uid === user.uid) await checkAccess(services,user);
+    });
+    dialog.show();
+  }
+
+  function ledgerAdapter(store,database,auth,uid,canInvite) {
     const reference = store.doc(database,'users',uid,'ledger','current');
     let revision = 0;
     return {
+      canInvite,
       async load() {
         const snapshot = await store.getDocFromServer(reference);
         revision = snapshot.exists() ? snapshot.data().revision : 0;
@@ -119,31 +191,14 @@
         <button class="btn primary" type="submit" value="sign-in">${copy.signIn}</button>
         <button class="btn" type="submit" value="create">${copy.create}</button>
       </form>
-      <details class="auth-phone"><summary>${copy.phoneTitle}</summary>
-      <form id="phone-send" class="fields">
-        <label class="field full">${copy.phone}<input type="tel" name="phone" dir="ltr"
-          autocomplete="tel" placeholder="+16505553434" pattern="\\+[1-9][0-9]{7,14}" required></label>
-        <div class="full" id="phone-captcha"></div>
-        <button class="btn primary" type="submit">${copy.send}</button>
-      </form>
-      <form id="phone-verify" class="fields" hidden>
-        <label class="field full">${copy.code}<input name="code" dir="ltr" inputmode="numeric"
-          autocomplete="one-time-code" pattern="[0-9]{6}" required></label>
-        <button class="btn primary" type="submit">${copy.verify}</button>
-      </form>
-      </details>
       <p role="status" id="phone-message"></p>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const message = dialog.querySelector('#phone-message');
     const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
-    const send = dialog.querySelector('#phone-send');
-    const verify = dialog.querySelector('#phone-verify');
-    let confirmation;
     if (!supported) {
       google.disabled = true;
       email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
-      dialog.querySelector('details').hidden = true;
       message.textContent = copy.origin;
     }
     google.addEventListener('click',async () => {
@@ -183,53 +238,11 @@
         buttons.forEach(button => { button.disabled = false; });
       }
     });
-    send.addEventListener('submit',async event => {
-      event.preventDefault();
-      const button = send.querySelector('button');
-      if (handling) return;
-      handling = true;
-      button.disabled = true;
-      message.textContent = copy.pending;
-      try {
-        const {auth,authSdk} = await connect();
-        if (!dialog.open || !send.isConnected || auth.currentUser) return;
-        verifier = new authSdk.RecaptchaVerifier(auth,'phone-captcha',{size:'invisible'});
-        confirmation = await authSdk.signInWithPhoneNumber(auth,send.elements.phone.value,verifier);
-        send.hidden = true;
-        verify.hidden = false;
-        message.textContent = copy.sent;
-        verify.elements.code.focus();
-      } catch (error) {
-        verifier?.clear();
-        verifier = undefined;
-        message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
-      } finally {
-        handling = false;
-        button.disabled = false;
-      }
-    });
-    verify.addEventListener('submit',async event => {
-      event.preventDefault();
-      const button = verify.querySelector('button');
-      if (handling) return;
-      handling = true;
-      button.disabled = true;
-      try {
-        await confirmation.confirm(verify.elements.code.value);
-      } catch (error) {
-        message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
-      } finally {
-        handling = false;
-        button.disabled = false;
-      }
-    });
     dialog.show();
   }
 
   dialog.addEventListener('close',() => {
-    dialog.classList.remove('login-screen');
-    verifier?.clear();
-    verifier = undefined;
+    if (!dialog.open) dialog.classList.remove('login-screen');
   });
 
   window.addEventListener('myledger-auth-request',async event => {
@@ -247,8 +260,9 @@
     }
   });
   window.addEventListener('myledger-share-request',event => {
-    if (!currentUser || location.protocol !== 'https:' || dialog.open) return;
+    if (!ownerAccess || location.protocol !== 'https:' || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
+    const access = ownerAccess;
     const url = new URL(location.href);
     url.search = '';
     url.hash = '';
@@ -265,12 +279,29 @@
       <p role="status" id="share-message"></p>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const form = dialog.querySelector('#invite');
-    form.addEventListener('submit',event => {
+    form.addEventListener('submit',async event => {
       event.preventDefault();
-      const to = encodeURIComponent(form.elements.recipient.value.trim());
-      const subject = encodeURIComponent(copy.subject);
-      const body = encodeURIComponent(copy.invitation + '\n\n' + appUrl);
-      location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+      const button = form.querySelector('button');
+      const status = dialog.querySelector('#share-message');
+      const email = form.elements.recipient.value.trim().toLowerCase();
+      if (ownerAccess !== access || email.includes('/') || email.length > 254) {
+        status.textContent = copy.inviteFailed;
+        return;
+      }
+      const {store,database} = access;
+      button.disabled = true;
+      try {
+        await store.setDoc(store.doc(database,'accessInvites',email),{allowed:true});
+        status.textContent = copy.invited;
+        const to = encodeURIComponent(email);
+        const subject = encodeURIComponent(copy.subject);
+        const body = encodeURIComponent(copy.invitation + '\n\n' + appUrl);
+        location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+      } catch {
+        status.textContent = copy.inviteFailed;
+      } finally {
+        button.disabled = false;
+      }
     });
     dialog.querySelector('#copy-link').addEventListener('click',async () => {
       const status = dialog.querySelector('#share-message');

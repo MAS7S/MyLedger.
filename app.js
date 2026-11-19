@@ -217,7 +217,7 @@ function render() {
     <header><div class="top">
       <div class="brand"><span class="mark">${icon('wallet')}</span><span>${t('title')}</span></div>
       <div class="tools">${!cloud && !cloudEnabled ? `<span class="demo">${t('demo')}</span>` : ''}
-        ${cloud && location.protocol === 'https:' ? button('cloud-share','share',t('share')) : ''}
+        ${cloud?.canInvite && location.protocol === 'https:' ? button('cloud-share','share',t('share')) : ''}
         ${cloudEnabled ? button('cloud-auth','globe',t(cloud ? 'signOut' : 'signIn')) : ''}${button('language','globe',rtl ? 'English' : 'العربية')}</div>
     </div></header>
     ${unavailable ? `<main><div class="card" role="status">
