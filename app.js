@@ -10,6 +10,13 @@ const labels = {
   imported:['تم استيراد النسخة الاحتياطية','Backup imported'], noMatches:['لا توجد عمليات مطابقة للتصفية.','No transactions match the filters.'],
   matchCount:['عدد العمليات','Transaction count'], monthReport:['تقرير العمليات','Transaction report'],
   currencyLabel:['العملة','Currency'],
+  signIn:['الدخول بالجوال','Phone sign-in'], signOut:['تسجيل الخروج','Sign out'],
+  cloudLoading:['جارٍ فتح بيانات الحساب…','Loading account data…'],
+  cloudReadError:['تعذّر تحميل الحساب. أعد المحاولة أو سجّل الخروج.','Could not load your account. Retry or sign out.'],
+  cloudSaveError:['تعذّر الحفظ في Firebase. حاول مرة أخرى.','Could not save to Firebase. Try again.'],
+  cloudConflict:['تغيّرت البيانات على جهاز آخر. أعد تحميل الحساب قبل تعديلها.','Data changed on another device. Reload the account before editing.'],
+  cloudLimit:['حجم البيانات يتجاوز سعة المزامنة. احفظ نسخة احتياطية.','Data exceeds sync capacity. Export a backup.'],
+  reloadCloud:['إعادة تحميل الحساب','Reload account'],
   title:['حساباتي الشخصية','My Personal Accounts'], demo:['بيانات تجريبية','Demo data'],
   overview:['نظرة عامة','Overview'], intro:['تابع أرصدتك ودخلك ومصاريفك في مكان واحد.','Track your balances, income, and expenses in one place.'],
   total:['إجمالي الرصيد المتاح','Total available balance'], cash:['الكاش','Cash'], bank:['البنك','Bank'],
@@ -107,6 +114,43 @@ function demoData() {
 let data;
 try { data = JSON.parse(localStorage.getItem(key)) || demoData(); }
 catch { data = demoData(); }
+let localData = data;
+let cloud = null;
+let cloudState = 'local';
+let cloudBusy = false;
+let session = 0;
+const cloudEnabled = document.body.hasAttribute('data-firebase');
+
+function emptyAccount() {
+  return {opening:{cash:0,bank:0},entries:[],custom:{income:[],expense:[]},lang:localData.lang};
+}
+
+async function loadAccount(adapter) {
+  const attempt = ++session;
+  cloud = adapter;
+  if (editor.open) editor.close();
+  cloudState = adapter ? 'loading' : 'local';
+  data = adapter ? emptyAccount() : localData;
+  render();
+  if (!adapter) return;
+  try {
+    const payload = await adapter.load();
+    if (attempt !== session) return;
+    if (payload !== null) {
+      const loaded = parseBackup(payload);
+      if (!loaded) throw new Error('Invalid ledger');
+      data = loaded;
+    }
+    cloudState = 'ready';
+  } catch {
+    if (attempt !== session) return;
+    cloudState = 'error';
+  }
+  render();
+}
+if (cloudEnabled) {
+  window.addEventListener('myledger-account', event => void loadAccount(event.detail));
+}
 const t = name => labels[name]?.[data.lang === 'ar' ? 0 : 1] ?? name;
 const locale = () => data.lang === 'ar' ? 'ar-SA-u-ca-gregory-nu-latn' : 'en';
 const number = cents => new Intl.NumberFormat(locale(), {minimumFractionDigits:2,maximumFractionDigits:2}).format(cents / 100);
@@ -162,12 +206,17 @@ function render() {
   const visible = visibleEntries();
   const filtered = filters.type !== 'all' || filters.method !== 'all';
   const rtl = data.lang === 'ar';
+  const unavailable = ['loading','error','conflict'].includes(cloudState);
   app.innerHTML = `
     <header><div class="top">
       <div class="brand"><span class="mark">${icon('wallet')}</span><span>${t('title')}</span></div>
-      <div class="tools"><span class="demo">${t('demo')}</span>${button('language','globe',rtl ? 'English' : 'العربية')}</div>
+      <div class="tools">${!cloud && !cloudEnabled ? `<span class="demo">${t('demo')}</span>` : ''}
+        ${cloudEnabled ? button('cloud-auth','globe',t(cloud ? 'signOut' : 'signIn')) : ''}${button('language','globe',rtl ? 'English' : 'العربية')}</div>
     </div></header>
-    <main>
+    ${unavailable ? `<main><div class="card" role="status">
+      <p>${t(cloudState === 'loading' ? 'cloudLoading' : cloudState === 'conflict' ? 'cloudConflict' : 'cloudReadError')}</p>
+      ${cloudState === 'loading' ? '' : button('reload-cloud','wallet',t('reloadCloud'))}
+    </div></main>` : `<main>
       <div class="heading"><div><h1>${t('overview')}</h1><p class="subtitle">${t('intro')}</p></div>
         ${button('opening','wallet',t('opening'))}
       </div>
@@ -235,7 +284,7 @@ function render() {
           }).join('') || `<p class="empty">${t(filtered ? 'noMatches' : 'noEntries')}</p>`}</div>
         </article>
       </section>
-    </main>`;
+    </main>`}`;
 }
 
 const typeTitle = {income:'addIncome',expense:'addExpense',transfer:'transfer',pay:'pay',opening:'opening'};
@@ -296,7 +345,7 @@ function openEditor(type, entry) {
     }
   };
   form.addEventListener('input',synchronize);
-  form.addEventListener('submit', event => {
+  form.addEventListener('submit', async event => {
     event.preventDefault();
     const candidate = structuredClone(data);
     const error = editor.querySelector('.error');
@@ -323,8 +372,13 @@ function openEditor(type, entry) {
       else candidate.entries[index] = record;
       if (!validCard(candidate.entries)) { error.textContent = t('debtError'); return; }
     }
-    if (!persist(candidate)) { error.textContent = t('storageError'); return; }
-    if (type !== 'opening') month = input('date').value.slice(0,7);
+    const period = input('date')?.value.slice(0,7);
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    const failure = await persist(candidate);
+    submit.disabled = false;
+    if (failure) { if (failure !== 'session') error.textContent = t(failure); return; }
+    if (period) month = period;
     editor.close();
     render();
     announce(t('saved'));
@@ -342,11 +396,33 @@ function validCard(entries) {
   return sorted.every(entry => (due += cardChange(entry)) >= 0);
 }
 
-function persist(candidate) {
-  try { localStorage.setItem(key,JSON.stringify(candidate)); }
-  catch { return false; }
-  data = candidate;
-  return true;
+async function persist(candidate) {
+  if (!cloud) {
+    try { localStorage.setItem(key,JSON.stringify(candidate)); }
+    catch { return 'storageError'; }
+    data = localData = candidate;
+    return null;
+  }
+  if (cloudBusy || cloudState !== 'ready') return 'cloudSaveError';
+  const attempt = session;
+  cloudBusy = true;
+  try {
+    await cloud.save(JSON.stringify({version:1,data:candidate}));
+    if (attempt !== session) return 'session';
+    data = candidate;
+    return null;
+  } catch (error) {
+    if (attempt !== session) return 'session';
+    if (error.code === 'ledger-conflict') {
+      cloudState = 'conflict';
+      if (editor.open) editor.close();
+      render();
+      return 'cloudConflict';
+    }
+    return error.code === 'ledger-limit' ? 'cloudLimit' : 'cloudSaveError';
+  } finally {
+    cloudBusy = false;
+  }
 }
 let timer;
 function announce(message) {
@@ -355,16 +431,24 @@ function announce(message) {
   timer = setTimeout(() => { status.textContent = ''; },3000);
 }
 
-document.addEventListener('click',event => {
+document.addEventListener('click',async event => {
   const control = event.target.closest('[data-action]');
   if (!control) return;
   const [action,id] = control.dataset.action.split(':');
+  if (cloudBusy) return;
+  if (action === 'cloud-auth') {
+    window.dispatchEvent(new CustomEvent('myledger-auth-request',{detail:data.lang}));
+    return;
+  }
+  if (action === 'reload-cloud') { await loadAccount(cloud); return; }
   if (action === 'close') { editor.close(); return; }
   if (action === 'language') {
-    if (persist({...data,lang:data.lang === 'ar' ? 'en' : 'ar'})) {
+    if (['loading','error','conflict'].includes(cloudState)) return;
+    const failure = await persist({...data,lang:data.lang === 'ar' ? 'en' : 'ar'});
+    if (!failure) {
       render();
       app.querySelector('[data-action="language"]').focus();
-    } else announce(t('storageError'));
+    } else if (failure !== 'session') announce(t(failure));
     return;
   }
   if (action === 'previous' || action === 'next') {
@@ -394,8 +478,11 @@ document.addEventListener('click',event => {
   if (action === 'remove' && window.confirm(t('confirm'))) {
     const candidate = {...data,entries:data.entries.filter(item => item.id !== id)};
     if (!validCard(candidate.entries)) announce(t('debtError'));
-    else if (!persist(candidate)) announce(t('storageError'));
-    else { render(); announce(t('deleted')); }
+    else {
+      const failure = await persist(candidate);
+      if (!failure) { render(); announce(t('deleted')); }
+      else if (failure !== 'session') announce(t(failure));
+    }
   }
 });
 app.addEventListener('change',event => {
@@ -492,15 +579,18 @@ function parseBackup(contents) {
 }
 
 async function importBackup(file) {
+  const attempt = session;
   let candidate;
   try {
     candidate = file.size <= 10 * 1024 * 1024 ? parseBackup(await file.text()) : null;
   } catch {
     candidate = null;
   }
+  if (attempt !== session) return;
   if (!candidate) { announce(t('invalidBackup')); return; }
   if (!window.confirm(t('replaceBackup'))) return;
-  if (!persist(candidate)) { announce(t('storageError')); return; }
+  const failure = await persist(candidate);
+  if (failure) { if (failure !== 'session') announce(t(failure)); return; }
   filters = {type:'all',method:'all'};
   month = candidate.entries.reduce((latest,entry) => {
     const period = entry.date.slice(0,7);

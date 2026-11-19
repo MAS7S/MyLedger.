@@ -1,0 +1,30 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // A ledger belongs to the authenticated UID in its path. The payload
+    // is a bounded JSON export. The revision coordinates concurrent edits.
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function isValidLedger(ledger) {
+      return ledger.keys().hasAll(['revision', 'payload'])
+        && ledger.keys().hasOnly(['revision', 'payload'])
+        && ledger.revision is int
+        && ledger.payload is string
+        && ledger.payload.size() > 0
+        && ledger.payload.size() <= 700000;
+    }
+
+    match /users/{uid}/ledger/current {
+      allow get: if isOwner(uid);
+      allow create: if isOwner(uid)
+        && isValidLedger(request.resource.data)
+        && request.resource.data.revision == 1;
+      allow update: if isOwner(uid)
+        && isValidLedger(request.resource.data)
+        && request.resource.data.revision == resource.data.revision + 1;
+    }
+  }
+}
