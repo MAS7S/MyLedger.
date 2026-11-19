@@ -104,7 +104,15 @@
   function showSignInForm(copy) {
     dialog.classList.add('login-screen');
     dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
-      <button class="btn google-sign-in" id="google-sign-in" type="button">${copy.google}</button>
+      <button class="btn google-sign-in" id="google-sign-in" type="button">
+        <svg class="google-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+          <path fill="#4285F4" d="M43.61 24.46c0-1.36-.12-2.71-.35-4.04H24v7.65h11.02a9.42 9.42 0 0 1-4.08 6.18v5.13h6.61c3.86-3.55 6.06-8.77 6.06-14.92z"/>
+          <path fill="#34A853" d="M24 44c5.5 0 10.11-1.82 13.55-4.62l-6.61-5.13c-1.83 1.23-4.2 1.95-6.94 1.95-5.32 0-9.83-3.59-11.44-8.42H5.74v5.29A20 20 0 0 0 24 44z"/>
+          <path fill="#FBBC05" d="M12.56 27.78a12 12 0 0 1 0-7.56v-5.29H5.74a20 20 0 0 0 0 18.14z"/>
+          <path fill="#EA4335" d="M24 11.8c3 0 5.69 1.04 7.8 3.05l5.85-5.85A19.16 19.16 0 0 0 24 4 20 20 0 0 0 5.74 14.93l6.82 5.29C14.17 15.39 18.68 11.8 24 11.8z"/>
+        </svg>
+        <span>${copy.google}</span>
+      </button>
       <form id="email-auth" class="fields">
         <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
