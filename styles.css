@@ -46,3 +46,6 @@
 .authorized-results li{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .authorized-results ul{padding-inline-start:0}
 .revoke-access{color:var(--accent);font-size:.8rem;flex:none}
+
+.login-brand-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#login-language{padding:6px 10px;font-size:.9rem}

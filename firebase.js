@@ -99,7 +99,7 @@
     accountChanged(null);
     const copy = messages[document.documentElement.lang] || messages.ar;
     if (!user) {
-      if (!dialog.open || !dialog.querySelector('#email-auth')) showSignInForm(copy);
+      if (!dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
       return;
     }
     showAccessStatus(copy,copy.pending,services);
@@ -196,9 +196,28 @@
     };
   }
 
-  function showSignInForm(copy) {
+  const loginLanguageKey = 'myledger-login-language';
+  let loginLanguage = 'en';
+  try {
+    if (localStorage.getItem(loginLanguageKey) === 'ar') loginLanguage = 'ar';
+  } catch {}
+
+  function showSignInForm() {
+    let copy = messages[loginLanguage];
+    const label = key => `<span data-login-label="${key}">${copy[key]}</span>`;
+    function applyLoginLanguage() {
+      copy = messages[loginLanguage];
+      document.documentElement.lang = loginLanguage;
+      document.documentElement.dir = loginLanguage === 'ar' ? 'rtl' : 'ltr';
+      dialog.querySelectorAll('[data-login-label]').forEach(node => {
+        node.textContent = copy[node.dataset.loginLabel];
+      });
+      const toggle = dialog.querySelector('#login-language');
+      toggle.textContent = loginLanguage === 'ar' ? 'English' : 'العربية';
+      toggle.lang = loginLanguage === 'ar' ? 'en' : 'ar';
+    }
     dialog.classList.add('login-screen');
-    dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
+    dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="phone-title">${label('title')}</h1></div>
       <button class="btn google-sign-in" id="google-sign-in" type="button">
         <svg class="google-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#4285F4" d="M43.61 24.46c0-1.36-.12-2.71-.35-4.04H24v7.65h11.02a9.42 9.42 0 0 1-4.08 6.18v5.13h6.61c3.86-3.55 6.06-8.77 6.06-14.92z"/>
@@ -206,22 +225,22 @@
           <path fill="#FBBC05" d="M12.56 27.78a12 12 0 0 1 0-7.56v-5.29H5.74a20 20 0 0 0 0 18.14z"/>
           <path fill="#EA4335" d="M24 11.8c3 0 5.69 1.04 7.8 3.05l5.85-5.85A19.16 19.16 0 0 0 24 4 20 20 0 0 0 5.74 14.93l6.82 5.29C14.17 15.39 18.68 11.8 24 11.8z"/>
         </svg>
-        <span>${copy.google}</span>
+        <span>${label('google')}</span>
       </button>
       <form id="email-auth" class="fields">
-        <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
-        <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="btn primary" type="submit" value="sign-in">${copy.signIn}</button>
+        <label class="field full">${label('email')}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
+        <label class="field full">${label('password')}<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn primary" type="submit" value="sign-in">${label('signIn')}</button>
       </form>
-      <details class="auth-phone"><summary>${copy.phone}</summary>
+      <details class="auth-phone"><summary>${label('phone')}</summary>
         <form id="phone-send" class="fields">
-          <label class="field full">${copy.phoneNumber}<input name="phone" type="tel" dir="ltr" autocomplete="tel" placeholder="+16505553434" pattern="[+][1-9][0-9]{7,14}" required></label>
+          <label class="field full">${label('phoneNumber')}<input name="phone" type="tel" dir="ltr" autocomplete="tel" placeholder="+16505553434" pattern="[+][1-9][0-9]{7,14}" required></label>
           <div id="phone-captcha" class="full"></div>
-          <button class="btn primary" type="submit">${copy.sendCode}</button>
+          <button class="btn primary" type="submit">${label('sendCode')}</button>
         </form>
         <form id="phone-verify" class="fields" hidden>
-          <label class="field full">${copy.code}<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label>
-          <button class="btn primary" type="submit">${copy.confirmCode}</button>
+          <label class="field full">${label('code')}<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label>
+          <button class="btn primary" type="submit">${label('confirmCode')}</button>
         </form>
       </details>
       <p role="status" id="phone-message"></p>`;
@@ -269,12 +288,20 @@
         buttons.forEach(button => { button.disabled = false; });
       }
     });
-    if (supported) wirePhoneForms(copy,message);
+    applyLoginLanguage();
+    dialog.querySelector('#login-language').addEventListener('click',() => {
+      if (handling) return;
+      loginLanguage = loginLanguage === 'ar' ? 'en' : 'ar';
+      try { localStorage.setItem(loginLanguageKey,loginLanguage); } catch {}
+      applyLoginLanguage();
+      message.textContent = !supported ? copy.origin : dialog.querySelector('#phone-verify').hidden ? '' : copy.sent;
+    });
+    if (supported) wirePhoneForms(() => copy,message);
     else dialog.querySelector('details').hidden = true;
     dialog.show();
   }
 
-  function wirePhoneForms(copy,message) {
+  function wirePhoneForms(getCopy,message) {
     const send = dialog.querySelector('#phone-send');
     const verify = dialog.querySelector('#phone-verify');
     let confirmation;
@@ -285,7 +312,7 @@
       handling = true;
       button.disabled = true;
       try { await work(); }
-      catch (error) { message.textContent = [copy.error,error.code].filter(Boolean).join(' · '); }
+      catch (error) { message.textContent = [getCopy().error,error.code].filter(Boolean).join(' · '); }
       finally { handling = false; button.disabled = false; }
     });
     onSubmit(send,async () => {
@@ -296,7 +323,7 @@
       confirmation = await authSdk.signInWithPhoneNumber(auth,send.elements.phone.value,phoneVerifier);
       send.hidden = true;
       verify.hidden = false;
-      message.textContent = copy.sent;
+      message.textContent = getCopy().sent;
       verify.elements.code.focus();
     });
     onSubmit(verify,() => confirmation.confirm(verify.elements.code.value));
@@ -311,7 +338,7 @@
   window.addEventListener('myledger-auth-request',async event => {
     if (handling || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
-    if (!currentUser) { showSignInForm(copy); return; }
+    if (!currentUser) { showSignInForm(); return; }
     handling = true;
     try {
       const {auth,authSdk} = await connect();
@@ -485,6 +512,6 @@
     dialog.showModal();
     void loadAuthorized();
   });
-  showSignInForm(messages[document.documentElement.lang] || messages.ar);
+  showSignInForm();
   if (supported) void connect().catch(() => {});
 })();
