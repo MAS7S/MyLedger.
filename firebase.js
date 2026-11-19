@@ -12,6 +12,8 @@
 
   const messages = {
     ar: {
+      revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
+      revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
       authorized:'المصرّح لهم', authorizedEmails:'الإيميلات', authorizedPhones:'أرقام الهاتف',
       listLoading:'جارٍ تحميل القائمة…', listEmpty:'ما فيه بيانات في هذه القائمة.',
       listError:'تعذّر تحميل القائمة. تأكّد من نشر قواعد Firestore الجديدة ثم أعد المحاولة.', retry:'إعادة المحاولة',
@@ -30,6 +32,8 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
+      revoke:'Remove access', revokeConfirm:'Remove access for',
+      revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
       authorized:'Authorized people', authorizedEmails:'Email addresses', authorizedPhones:'Phone numbers',
       listLoading:'Loading approved entries…', listEmpty:'No approved entries in this list.',
       listError:'Could not load the list. Make sure the latest Firestore rules are published and try again.', retry:'Retry',
@@ -427,7 +431,39 @@
               const value = document.createElement('bdi');
               value.dir = 'ltr';
               value.textContent = recipient;
-              item.append(value);
+              const remove = document.createElement('button');
+              remove.type = 'button';
+              remove.className = 'btn revoke-access';
+              remove.textContent = copy.revoke;
+              remove.setAttribute('aria-label', copy.revoke + ' · ' + recipient);
+              remove.addEventListener('click', async () => {
+                if (!stillOpen() || remove.disabled ||
+                    !window.confirm(copy.revokeConfirm + ' ' + recipient + '?')) return;
+
+                remove.disabled = true;
+                status.textContent = '';
+                try {
+                  const [collection] = collections[index];
+                  await store.deleteDoc(store.doc(database,collection,recipient));
+                  if (!stillOpen()) return;
+                  const next = item.nextElementSibling || item.previousElementSibling;
+                  item.remove();
+                  if (!list.childElementCount) {
+                    const empty = document.createElement('p');
+                    empty.textContent = copy.listEmpty;
+                    list.replaceWith(empty);
+                  }
+                  const focusTarget = next?.querySelector('button') || dialog.querySelector('form[method="dialog"] button');
+                  focusTarget?.focus();
+                  status.textContent = copy.revoked + ' ' + recipient;
+                } catch {
+                  if (stillOpen()) {
+                    status.textContent = copy.revokeError;
+                    remove.disabled = false;
+                  }
+                }
+              });
+              item.append(value,remove);
               list.append(item);
             }
           } else {
