@@ -1,0 +1,35 @@
+name: Deploy MyLedger to Firebase
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: myledger-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - name: Deploy Hosting and Firestore rules
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::error::Add FIREBASE_TOKEN to this repository's Actions secrets."
+            exit 1
+          fi
+          npx --yes firebase-tools@15.37.0 deploy --only 'hosting,firestore:rules' --project my-ledger-8d0b3 --non-interactive
