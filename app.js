@@ -10,7 +10,7 @@ const labels = {
   imported:['تم استيراد النسخة الاحتياطية','Backup imported'], noMatches:['لا توجد عمليات مطابقة للتصفية.','No transactions match the filters.'],
   matchCount:['عدد العمليات','Transaction count'], monthReport:['تقرير العمليات','Transaction report'],
   currencyLabel:['العملة','Currency'],
-  signIn:['تسجيل الدخول','Sign in'], share:['منح الوصول','Grant access'], signOut:['تسجيل الخروج','Sign out'],
+  signIn:['تسجيل الدخول','Sign in'], share:['منح الوصول','Grant access'], authorized:['المصرّح لهم','Authorized people'], signOut:['تسجيل الخروج','Sign out'],
   cloudLoading:['جارٍ فتح بيانات الحساب…','Loading account data…'],
   cloudReadError:['تعذّر تحميل الحساب. أعد المحاولة أو سجّل الخروج.','Could not load your account. Retry or sign out.'],
   cloudSaveError:['تعذّر الحفظ في Firebase. حاول مرة أخرى.','Could not save to Firebase. Try again.'],
@@ -52,6 +52,7 @@ const paths = {
   expense:'M5 8l5 5 4-4 5 7m-5 0h5v-5',
   net:'M4 17h16M7 13V9m5 4V6m5 7V3',
   transfer:'M4 8h16m-4-4 4 4-4 4m4 4H4m4-4-4 4 4 4',
+  people:'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-4m-6-6a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm4-4a4 4 0 0 1 0 8',
   share:'M7 12h.01m10-6h.01m0 12h.01M9 11l6-4m-6 6 6 4M5 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0Zm10-6a2 2 0 1 0 4 0 2 2 0 0 0-4 0Zm0 12a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z',
   download:'M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4',
   upload:'M12 16V4m-4 4 4-4 4 4M4 17v4h16v-4',
@@ -217,7 +218,7 @@ function render() {
     <header><div class="top">
       <div class="brand"><span class="mark">${icon('wallet')}</span><span>${t('title')}</span></div>
       <div class="tools">${!cloud && !cloudEnabled ? `<span class="demo">${t('demo')}</span>` : ''}
-        ${cloud?.canInvite && location.protocol === 'https:' ? button('cloud-share','share',t('share')) : ''}
+        ${cloud?.canInvite && location.protocol === 'https:' ? button('cloud-share','share',t('share')) + button('cloud-authorized','people',t('authorized')) : ''}
         ${cloudEnabled ? button('cloud-auth','globe',t(cloud ? 'signOut' : 'signIn')) : ''}${button('language','globe',rtl ? 'English' : 'العربية')}</div>
     </div></header>
     ${unavailable ? `<main><div class="card" role="status">
@@ -443,8 +444,8 @@ document.addEventListener('click',async event => {
   if (!control) return;
   const [action,id] = control.dataset.action.split(':');
   if (cloudBusy) return;
-  if (action === 'cloud-auth' || action === 'cloud-share') {
-    window.dispatchEvent(new CustomEvent(action === 'cloud-auth' ? 'myledger-auth-request' : 'myledger-share-request',{detail:data.lang}));
+  if (['cloud-auth','cloud-share','cloud-authorized'].includes(action)) {
+    window.dispatchEvent(new CustomEvent(action.replace('cloud-','myledger-') + '-request',{detail:data.lang}));
     return;
   }
   if (action === 'reload-cloud') { await loadAccount(cloud); return; }

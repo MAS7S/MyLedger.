@@ -12,6 +12,9 @@
 
   const messages = {
     ar: {
+      authorized:'المصرّح لهم', authorizedEmails:'الإيميلات', authorizedPhones:'أرقام الهاتف',
+      listLoading:'جارٍ تحميل القائمة…', listEmpty:'ما فيه بيانات في هذه القائمة.',
+      listError:'تعذّر تحميل القائمة. تأكّد من نشر قواعد Firestore الجديدة ثم أعد المحاولة.', retry:'إعادة المحاولة',
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
       signIn:'دخول بالبريد', 
       share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول', copy:'نسخ رابط التطبيق',
@@ -27,6 +30,9 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
+      authorized:'Authorized people', authorizedEmails:'Email addresses', authorizedPhones:'Phone numbers',
+      listLoading:'Loading approved entries…', listEmpty:'No approved entries in this list.',
+      listError:'Could not load the list. Make sure the latest Firestore rules are published and try again.', retry:'Retry',
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
       share:'Grant access to MyLedger', method:'Access method',recipient:'Invitee email',
       grant:'Grant access',copy:'Copy app link',copied:'Link copied',
@@ -377,6 +383,71 @@
       }
     });
     dialog.showModal();
+  });
+  window.addEventListener('myledger-authorized-request',event => {
+    if (!ownerAccess || dialog.open) return;
+    const access = ownerAccess;
+    const {store,database} = access;
+    const copy = messages[event.detail] || messages.ar;
+    const collections = [
+      ['accessInvites',copy.authorizedEmails],
+      ['accessPhoneInvites',copy.authorizedPhones]
+    ];
+    dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.authorized}</h2></div>
+      <p id="authorized-status" role="status"></p>
+      <div id="authorized-results" class="authorized-results"></div>
+      <div class="dialog-actions">
+        <button type="button" id="retry-authorized" class="btn" hidden>${copy.retry}</button>
+        <form method="dialog"><button class="btn">${copy.close}</button></form>
+      </div>`;
+    dialog.setAttribute('aria-labelledby','phone-title');
+    const status = dialog.querySelector('#authorized-status');
+    const results = dialog.querySelector('#authorized-results');
+    const retry = dialog.querySelector('#retry-authorized');
+    const stillOpen = () => ownerAccess === access && dialog.open && results.isConnected;
+
+    async function loadAuthorized() {
+      status.textContent = copy.listLoading;
+      retry.hidden = true;
+      try {
+        const snapshots = await Promise.all(collections.map(([name]) =>
+          store.getDocsFromServer(store.collection(database,name))));
+        if (!stillOpen()) return;
+        for (const [index,snapshot] of snapshots.entries()) {
+          const section = document.createElement('section');
+          const heading = document.createElement('h3');
+          heading.textContent = collections[index][1];
+          section.append(heading);
+          const recipients = snapshot.docs.filter(entry => entry.data().allowed === true)
+            .map(entry => entry.id).sort((a,b) => a.localeCompare(b));
+          const list = document.createElement(recipients.length ? 'ul' : 'p');
+          if (recipients.length) {
+            for (const recipient of recipients) {
+              const item = document.createElement('li');
+              const value = document.createElement('bdi');
+              value.dir = 'ltr';
+              value.textContent = recipient;
+              item.append(value);
+              list.append(item);
+            }
+          } else {
+            list.textContent = copy.listEmpty;
+          }
+          section.append(list);
+          results.append(section);
+        }
+        status.textContent = '';
+      } catch {
+        if (!stillOpen()) return;
+        results.replaceChildren();
+        status.textContent = copy.listError;
+        retry.hidden = false;
+      }
+    }
+    retry.addEventListener('click',loadAuthorized);
+    dialog.addEventListener('close',() => results.replaceChildren(),{once:true});
+    dialog.showModal();
+    void loadAuthorized();
   });
   showSignInForm(messages[document.documentElement.lang] || messages.ar);
   if (supported) void connect().catch(() => {});
