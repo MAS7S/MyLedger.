@@ -10,7 +10,7 @@ const labels = {
   imported:['تم استيراد النسخة الاحتياطية','Backup imported'], noMatches:['لا توجد عمليات مطابقة للتصفية.','No transactions match the filters.'],
   matchCount:['عدد العمليات','Transaction count'], monthReport:['تقرير العمليات','Transaction report'],
   currencyLabel:['العملة','Currency'],
-  signIn:['تسجيل الدخول','Sign in'], share:['مشاركة التطبيق','Share app'], signOut:['تسجيل الخروج','Sign out'],
+  signIn:['تسجيل الدخول','Sign in'], share:['منح الوصول','Grant access'], signOut:['تسجيل الخروج','Sign out'],
   cloudLoading:['جارٍ فتح بيانات الحساب…','Loading account data…'],
   cloudReadError:['تعذّر تحميل الحساب. أعد المحاولة أو سجّل الخروج.','Could not load your account. Retry or sign out.'],
   cloudSaveError:['تعذّر الحفظ في Firebase. حاول مرة أخرى.','Could not save to Firebase. Try again.'],
