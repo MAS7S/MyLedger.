@@ -13,34 +13,30 @@
   const messages = {
     ar: {
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
-      signIn:'دخول بالبريد', create:'إنشاء حساب', 
-      share:'مشاركة MyLedger', recipient:'بريد الشخص المدعو', draft:'فتح رسالة الدعوة', copy:'نسخ رابط التطبيق',
-      copied:'تم نسخ الرابط', subject:'جرّب MyLedger',
-      invitation:'جرّب MyLedger. افتح الرابط وسجّل الدخول بحساب Google المطابق للبريد المدعو:',
-      phoneInvitation:'جرّب MyLedger. افتح الرابط وسجّل الدخول برقم الهاتف الذي استلم هذه الدعوة:',
+      signIn:'دخول بالبريد', 
+      share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول', copy:'نسخ رابط التطبيق',
+      copied:'تم نسخ الرابط',
       phone:'الدخول برقم الهاتف', phoneNumber:'رقم الهاتف مع مفتاح الدولة', sendCode:'إرسال رمز التحقق',
       confirmCode:'تأكيد الرمز', code:'رمز التحقق', sent:'أدخل الرمز المرسل إلى رقمك.',
-      sharePhone:'دعوة برقم الهاتف', draftSms:'فتح رسالة SMS', wrongMethod:'استخدم حساب Google أو رقم الهاتف المطابق للدعوة.',
-      close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'هذا البريد غير مدعو. جرّب بريدًا آخر.',
+      sharePhone:'رقم الهاتف',
+      close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'لا توجد دعوة مطابقة لهذا الحساب. استخدم البريد أو الرقم الذي وافق عليه المالك.',
       confirmEmail:'أكّد ملكية بريدك لمتابعة الدخول.', sendVerification:'إرسال رابط التأكيد',
       verificationSent:'أرسلنا رابط التأكيد. افتحه ثم اضغط «تحقّق مجددًا».', checkAgain:'تحقّق مجددًا',
-      signOut:'استخدام حساب آخر', inviteFailed:'تعذّر إضافة البريد إلى قائمة السماح.', invited:'تم السماح لهذا البريد.',
+      signOut:'استخدام حساب آخر', inviteFailed:'تعذّر منح الوصول.', invited:'تم منح الوصول لـ',
       origin:'افتح التطبيق من رابط HTTPS معتمد، أو استخدم محاكيات Firebase محليًا.',
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
-      create:'Create account',share:'Share MyLedger',recipient:'Invitee email',
-      draft:'Open invitation email',copy:'Copy app link',copied:'Link copied',subject:'Try MyLedger',
-      invitation:'Try MyLedger. Open the link and sign in with the Google account matching the invited email:',
-      phoneInvitation:'Try MyLedger. Open the link and sign in with the phone number that received this invitation:',
+      share:'Grant access to MyLedger', method:'Access method',recipient:'Invitee email',
+      grant:'Grant access',copy:'Copy app link',copied:'Link copied',
       phone:'Sign in by phone', phoneNumber:'Phone number with country code', sendCode:'Send verification code',
       confirmCode:'Verify code', code:'Verification code', sent:'Enter the code sent to your phone.',
-      sharePhone:'Invite by phone', draftSms:'Open text message', wrongMethod:'Use the Google account or phone number on your invitation.',
-      close:'Close',pending:'Checking access…',denied:'This email has no invitation. Try a different account.',
+      sharePhone:'Phone number',
+      close:'Close',pending:'Checking access…',denied:'No invitation matches this account. Use the email or phone number approved by the owner.',
       confirmEmail:'Verify your email address to continue.',sendVerification:'Send verification link',
       verificationSent:'Open the link in your inbox, then select Check again.',checkAgain:'Check again',
-      signOut:'Use another account',inviteFailed:'Could not allow this email.',invited:'This email now has access.',
+      signOut:'Use another account',inviteFailed:'Could not grant access.',invited:'Access granted to',
       origin:'Open the app on an authorized HTTPS origin or use the local Firebase emulators.',
       error:'Could not complete sign-in',out:'Could not sign out'
     }
@@ -115,7 +111,7 @@
         ? await store.getDocFromServer(store.doc(database,collection,recipient)) : null;
       if (attempt !== accessCheck) return;
       if (!owner && invitation?.data()?.allowed !== true) {
-        showAccessStatus(copy,recipient ? copy.denied : copy.wrongMethod,services);
+        showAccessStatus(copy,copy.denied,services);
         return;
       }
       if (owner) ownerAccess = {store,database};
@@ -206,7 +202,6 @@
         <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="btn primary" type="submit" value="sign-in">${copy.signIn}</button>
-        <button class="btn" type="submit" value="create">${copy.create}</button>
       </form>
       <details class="auth-phone"><summary>${copy.phone}</summary>
         <form id="phone-send" class="fields">
@@ -256,9 +251,7 @@
       try {
         const {auth,authSdk} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
-        const method = event.submitter?.value === 'create'
-          ? authSdk.createUserWithEmailAndPassword : authSdk.signInWithEmailAndPassword;
-        await method(auth,email.elements.email.value.trim(),email.elements.password.value);
+        await authSdk.signInWithEmailAndPassword(auth,email.elements.email.value.trim(),email.elements.password.value);
       } catch (error) {
         message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
       } finally {
@@ -329,12 +322,12 @@
     const appUrl = url.href;
     dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.share}</h2></div>
       <form id="invite" class="fields">
-        <label class="field full">${copy.share}<select name="method">
+        <label class="field full">${copy.method}<select name="method">
           <option value="email">${copy.email}</option><option value="phone">${copy.sharePhone}</option>
         </select></label>
         <label class="field full" id="invite-phone-field" hidden>${copy.phoneNumber}<input name="phone" type="tel" dir="ltr" pattern="[+][1-9][0-9]{7,14}" required disabled></label>
         <label class="field full" id="invite-email-field">${copy.recipient}<input name="recipient" type="email" dir="ltr" required></label>
-        <button class="btn primary" type="submit">${copy.draft}</button>
+        <button class="btn primary" type="submit">${copy.grant}</button>
       </form>
       <div class="dialog-actions">
         <button class="btn" id="copy-link" type="button">${copy.copy}</button>
@@ -349,7 +342,6 @@
       dialog.querySelector('#invite-email-field').hidden = phone;
       form.elements.phone.disabled = !phone;
       form.elements.recipient.disabled = phone;
-      form.querySelector('button').textContent = phone ? copy.draftSms : copy.draft;
     }
     form.elements.method.addEventListener('change',updateInviteMethod);
     updateInviteMethod();
@@ -364,19 +356,11 @@
         return;
       }
       const {store,database} = access;
+      if (button.disabled) return;
       button.disabled = true;
       try {
         await store.setDoc(store.doc(database,byPhone ? 'accessPhoneInvites' : 'accessInvites',recipient),{allowed:true});
-        status.textContent = copy.invited;
-        const to = encodeURIComponent(recipient);
-        const subject = encodeURIComponent(copy.subject);
-        const body = encodeURIComponent((byPhone ? copy.phoneInvitation : copy.invitation) + '\n\n' + appUrl);
-        if (byPhone) {
-          const separator = /iPad|iPhone|iPod/.test(navigator.userAgent) ? '&' : '?';
-          location.href = `sms:${recipient}${separator}body=${body}`;
-        } else {
-          location.href = `mailto:${to}?subject=${subject}&body=${body}`;
-        }
+        status.textContent = copy.invited + ' ' + recipient;
       } catch {
         status.textContent = copy.inviteFailed;
       } finally {
