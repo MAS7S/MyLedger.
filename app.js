@@ -193,6 +193,11 @@ function render() {
   document.documentElement.lang = data.lang;
   document.documentElement.dir = data.lang === 'ar' ? 'rtl' : 'ltr';
   document.title = t('title');
+  app.hidden = cloudEnabled && !cloud;
+  if (app.hidden) {
+    app.replaceChildren();
+    return;
+  }
   const balances = totals(data.entries);
   const entries = data.entries.filter(entry => entry.date.startsWith(month));
   const income = entries.filter(entry => entry.type === 'income').reduce((sum, entry) => sum + entry.amount, 0);

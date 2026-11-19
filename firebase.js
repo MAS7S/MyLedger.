@@ -64,6 +64,7 @@
         window.dispatchEvent(new CustomEvent('myledger-account', {
           detail: user ? ledgerAdapter(store,database,auth,user.uid) : null
         }));
+        if (!user && !dialog.open) showSignInForm(messages[document.documentElement.lang] || messages.ar);
       });
       return {auth,authSdk};
     }).catch(error => {
@@ -101,7 +102,8 @@
   }
 
   function showSignInForm(copy) {
-    dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.title}</h2></div>
+    dialog.classList.add('login-screen');
+    dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
       <form id="email-auth" class="fields">
         <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
@@ -121,8 +123,7 @@
         <button class="btn primary" type="submit">${copy.verify}</button>
       </form>
       </details>
-      <p role="status" id="phone-message"></p>
-      <form method="dialog" class="dialog-actions"><button class="btn">${copy.close}</button></form>`;
+      <p role="status" id="phone-message"></p>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const message = dialog.querySelector('#phone-message');
     const email = dialog.querySelector('#email-auth');
@@ -130,7 +131,7 @@
     const verify = dialog.querySelector('#phone-verify');
     let confirmation;
     if (!supported) {
-      email.hidden = true;
+      email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
       dialog.querySelector('details').hidden = true;
       message.textContent = copy.origin;
     }
@@ -194,10 +195,11 @@
         button.disabled = false;
       }
     });
-    dialog.showModal();
+    dialog.show();
   }
 
   dialog.addEventListener('close',() => {
+    dialog.classList.remove('login-screen');
     verifier?.clear();
     verifier = undefined;
   });
@@ -253,5 +255,6 @@
     });
     dialog.showModal();
   });
+  showSignInForm(messages[document.documentElement.lang] || messages.ar);
   if (supported) void connect().catch(() => {});
 })();

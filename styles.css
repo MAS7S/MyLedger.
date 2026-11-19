@@ -27,3 +27,9 @@
 .auth-phone summary{cursor:pointer;margin-bottom:10px;font-weight:700}
 @media(max-width:460px){.top{flex-wrap:wrap;padding-block:8px}.top .tools{flex-wrap:wrap}}
 @media print{#phone-auth{display:none!important}}
+
+.login-screen{position:fixed;inset:0;margin:auto;height:fit-content;padding:clamp(20px,5vw,34px);box-shadow:0 14px 42px #39291515}
+.login-heading{margin-bottom:22px}
+.login-brand{color:var(--accent);font-weight:800;letter-spacing:.025em}
+.login-heading h1{margin-top:7px}
+#phone-message:not(:empty){margin-top:14px;color:var(--muted)}
