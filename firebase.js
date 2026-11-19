@@ -12,6 +12,7 @@
 
   const messages = {
     ar: {
+      accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
       authorized:'المصرّح لهم', authorizedEmails:'الإيميلات', authorizedPhones:'أرقام الهاتف',
@@ -32,6 +33,7 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
+      accessRevoked:'Access revoked. Contact the owner for a new invitation.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
       authorized:'Authorized people', authorizedEmails:'Email addresses', authorizedPhones:'Phone numbers',
@@ -59,6 +61,8 @@
   let phoneVerifier;
   const phonePattern = /^[+][1-9][0-9]{7,14}$/;
   let accessCheck = 0;
+  let stopAccessWatch;
+  let accessRevoked = false;
   let handling = false;
   let currentUser;
 
@@ -94,14 +98,17 @@
   async function checkAccess(services,user) {
     const {auth,store,database} = services;
     const attempt = ++accessCheck;
+    stopAccessWatch?.();
+    stopAccessWatch = undefined;
     currentUser = user;
     ownerAccess = undefined;
     accountChanged(null);
     const copy = messages[document.documentElement.lang] || messages.ar;
     if (!user) {
-      if (!dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
+      if (accessRevoked || !dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
       return;
     }
+    accessRevoked = false;
     showAccessStatus(copy,copy.pending,services);
     try {
       const token = await user.getIdTokenResult();
@@ -113,20 +120,65 @@
         showAccessStatus(copy,copy.confirmEmail,services,Boolean(user.email));
         return;
       }
-      const owner = verifiedEmail && (await store.getDocFromServer(store.doc(database,'accessOwners',user.uid))).exists();
-      const email = verifiedEmail && token.claims.email?.toLowerCase();
-      const recipient = provider === 'google.com' && email && !email.includes('/') ? email : phone;
-      const collection = phone ? 'accessPhoneInvites' : 'accessInvites';
-      const invitation = !owner && recipient
-        ? await store.getDocFromServer(store.doc(database,collection,recipient)) : null;
+      const ownerRef = store.doc(database,'accessOwners',user.uid);
+      const owner = verifiedEmail && (await store.getDocFromServer(ownerRef)).exists();
       if (attempt !== accessCheck) return;
-      if (!owner && invitation?.data()?.allowed !== true) {
+      const email = verifiedEmail && token.claims.email?.trim().toLowerCase();
+      const recipient = provider === 'google.com' && email && !email.includes('/') ? email : phone;
+      if (!owner && !recipient) {
         showAccessStatus(copy,copy.denied,services);
         return;
       }
-      if (owner) ownerAccess = {store,database};
-      if (dialog.open) dialog.close();
-      accountChanged(ledgerAdapter(store,database,auth,user.uid,owner));
+      const collection = phone ? 'accessPhoneInvites' : 'accessInvites';
+      const permission = owner ? ownerRef : store.doc(database,collection,recipient);
+      let active = false;
+
+      const revoke = async () => {
+        if (attempt !== accessCheck) return;
+        ++accessCheck;
+        stopAccessWatch?.();
+        stopAccessWatch = undefined;
+        ownerAccess = undefined;
+        accessRevoked = true;
+        accountChanged(null);
+        showSignInForm();
+        try { await services.authSdk.signOut(auth); }
+        catch (error) {
+          if (auth.currentUser?.uid === user.uid) {
+            showAccessStatus(copy,copy.accessRevoked,services);
+          }
+        }
+      };
+      stopAccessWatch = store.onSnapshot(permission,{includeMetadataChanges:true},snapshot => {
+        if (attempt !== accessCheck || snapshot.metadata.hasPendingWrites) return;
+        if (snapshot.metadata.fromCache) {
+          if (active) {
+            active = false;
+            ownerAccess = undefined;
+            accountChanged(null);
+            showAccessStatus(copy,copy.pending,services,false,true);
+          }
+          return;
+        }
+        if (owner ? !snapshot.exists() : snapshot.data()?.allowed !== true) {
+          void revoke();
+          return;
+        }
+        if (active) return;
+        active = true;
+        if (owner) ownerAccess = {store,database};
+        if (dialog.open) dialog.close();
+        accountChanged(ledgerAdapter(store,database,auth,user.uid,owner));
+      },error => {
+        if (attempt !== accessCheck) return;
+        if (error.code === 'permission-denied') {
+          void revoke();
+          return;
+        }
+        ownerAccess = undefined;
+        accountChanged(null);
+        showAccessStatus(copy,[copy.error,error.code].filter(Boolean).join(' · '),services,false,true);
+      });
     } catch (error) {
       if (attempt !== accessCheck) return;
       showAccessStatus(copy,[copy.error,error.code].filter(Boolean).join(' · '),services,false,true);
@@ -246,6 +298,7 @@
       <p role="status" id="phone-message"></p>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const message = dialog.querySelector('#phone-message');
+    if (accessRevoked) message.textContent = copy.accessRevoked;
     const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
     if (!supported) {
