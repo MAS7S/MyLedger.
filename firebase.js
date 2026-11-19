@@ -12,14 +12,23 @@
 
   const messages = {
     ar: {
-      title:'الدخول بالجوال', phone:'رقم الجوال بالصيغة الدولية', code:'رمز التحقق',
+      title:'تسجيل الدخول', email:'البريد الإلكتروني', password:'كلمة المرور',
+      signIn:'دخول بالبريد', create:'إنشاء حساب', phoneTitle:'الدخول بالجوال',
+      share:'مشاركة MyLedger', recipient:'بريد الشخص المدعو', draft:'فتح رسالة الدعوة', copy:'نسخ رابط التطبيق',
+      copied:'تم نسخ الرابط', subject:'جرّب MyLedger',
+      invitation:'جرّب MyLedger لتسجيل مصاريفك. افتح الرابط وأنشئ حسابك الخاص:',
+      phone:'رقم الجوال بالصيغة الدولية', code:'رمز التحقق',
       send:'إرسال الرمز', verify:'تأكيد', close:'إغلاق', pending:'جارٍ الاتصال بـ Firebase…',
       sent:'أدخل رمز التحقق. لرقم الاختبار، استخدم الرمز المحفوظ في Firebase.',
       origin:'افتح التطبيق من رابط HTTPS معتمد، أو استخدم محاكيات Firebase محليًا.',
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
-      title:'Phone sign-in',phone:'Phone number in international format',code:'Verification code',
+      title:'Sign in',email:'Email',password:'Password',signIn:'Sign in by email',
+      create:'Create account',phoneTitle:'Phone sign-in',share:'Share MyLedger',recipient:'Invitee email',
+      draft:'Open invitation email',copy:'Copy app link',copied:'Link copied',subject:'Try MyLedger',
+      invitation:'Try MyLedger to track your expenses. Open this link and create your own account:',
+      phone:'Phone number in international format',code:'Verification code',
       send:'Send code',verify:'Verify',close:'Close',pending:'Connecting to Firebase…',
       sent:'Enter the verification code. For a test phone number, use the code saved in Firebase.',
       origin:'Open the app on an authorized HTTPS origin or use the local Firebase emulators.',
@@ -91,8 +100,15 @@
     };
   }
 
-  function showPhoneForm(copy) {
+  function showSignInForm(copy) {
     dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.title}</h2></div>
+      <form id="email-auth" class="fields">
+        <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
+        <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn primary" type="submit" value="sign-in">${copy.signIn}</button>
+        <button class="btn" type="submit" value="create">${copy.create}</button>
+      </form>
+      <details class="auth-phone"><summary>${copy.phoneTitle}</summary>
       <form id="phone-send" class="fields">
         <label class="field full">${copy.phone}<input type="tel" name="phone" dir="ltr"
           autocomplete="tel" placeholder="+16505553434" pattern="\\+[1-9][0-9]{7,14}" required></label>
@@ -104,21 +120,45 @@
           autocomplete="one-time-code" pattern="[0-9]{6}" required></label>
         <button class="btn primary" type="submit">${copy.verify}</button>
       </form>
+      </details>
       <p role="status" id="phone-message"></p>
       <form method="dialog" class="dialog-actions"><button class="btn">${copy.close}</button></form>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const message = dialog.querySelector('#phone-message');
+    const email = dialog.querySelector('#email-auth');
     const send = dialog.querySelector('#phone-send');
     const verify = dialog.querySelector('#phone-verify');
     let confirmation;
     if (!supported) {
-      send.hidden = true;
+      email.hidden = true;
+      dialog.querySelector('details').hidden = true;
       message.textContent = copy.origin;
     }
+    email.addEventListener('submit',async event => {
+      event.preventDefault();
+      if (handling) return;
+      handling = true;
+      const buttons = email.querySelectorAll('button');
+      buttons.forEach(button => { button.disabled = true; });
+      message.textContent = copy.pending;
+      try {
+        const {auth,authSdk} = await connect();
+        if (!dialog.open || !email.isConnected || auth.currentUser) return;
+        const method = event.submitter?.value === 'create'
+          ? authSdk.createUserWithEmailAndPassword : authSdk.signInWithEmailAndPassword;
+        await method(auth,email.elements.email.value.trim(),email.elements.password.value);
+      } catch (error) {
+        message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
+      } finally {
+        handling = false;
+        buttons.forEach(button => { button.disabled = false; });
+      }
+    });
     send.addEventListener('submit',async event => {
       event.preventDefault();
       const button = send.querySelector('button');
-      if (button.disabled) return;
+      if (handling) return;
+      handling = true;
       button.disabled = true;
       message.textContent = copy.pending;
       try {
@@ -135,19 +175,22 @@
         verifier = undefined;
         message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
       } finally {
+        handling = false;
         button.disabled = false;
       }
     });
     verify.addEventListener('submit',async event => {
       event.preventDefault();
       const button = verify.querySelector('button');
-      if (button.disabled) return;
+      if (handling) return;
+      handling = true;
       button.disabled = true;
       try {
         await confirmation.confirm(verify.elements.code.value);
       } catch (error) {
         message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
       } finally {
+        handling = false;
         button.disabled = false;
       }
     });
@@ -162,7 +205,7 @@
   window.addEventListener('myledger-auth-request',async event => {
     if (handling || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
-    if (!currentUser) { showPhoneForm(copy); return; }
+    if (!currentUser) { showSignInForm(copy); return; }
     handling = true;
     try {
       const {auth,authSdk} = await connect();
@@ -172,6 +215,43 @@
     } finally {
       handling = false;
     }
+  });
+  window.addEventListener('myledger-share-request',event => {
+    if (!currentUser || location.protocol !== 'https:' || dialog.open) return;
+    const copy = messages[event.detail] || messages.ar;
+    const url = new URL(location.href);
+    url.search = '';
+    url.hash = '';
+    const appUrl = url.href;
+    dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.share}</h2></div>
+      <form id="invite" class="fields">
+        <label class="field full">${copy.recipient}<input name="recipient" type="email" dir="ltr" required></label>
+        <button class="btn primary" type="submit">${copy.draft}</button>
+      </form>
+      <div class="dialog-actions">
+        <button class="btn" id="copy-link" type="button">${copy.copy}</button>
+        <form method="dialog"><button class="btn">${copy.close}</button></form>
+      </div>
+      <p role="status" id="share-message"></p>`;
+    dialog.setAttribute('aria-labelledby','phone-title');
+    const form = dialog.querySelector('#invite');
+    form.addEventListener('submit',event => {
+      event.preventDefault();
+      const to = encodeURIComponent(form.elements.recipient.value.trim());
+      const subject = encodeURIComponent(copy.subject);
+      const body = encodeURIComponent(copy.invitation + '\n\n' + appUrl);
+      location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+    });
+    dialog.querySelector('#copy-link').addEventListener('click',async () => {
+      const status = dialog.querySelector('#share-message');
+      try {
+        await navigator.clipboard.writeText(appUrl);
+        status.textContent = copy.copied;
+      } catch {
+        status.textContent = appUrl;
+      }
+    });
+    dialog.showModal();
   });
   if (supported) void connect().catch(() => {});
 })();

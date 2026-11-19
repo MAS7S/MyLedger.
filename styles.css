@@ -22,3 +22,8 @@
   .print-context{display:block;margin-bottom:14pt}
   .transaction{break-inside:avoid}
 }
+
+.auth-phone{margin-top:16px}
+.auth-phone summary{cursor:pointer;margin-bottom:10px;font-weight:700}
+@media(max-width:460px){.top{flex-wrap:wrap;padding-block:8px}.top .tools{flex-wrap:wrap}}
+@media print{#phone-auth{display:none!important}}
