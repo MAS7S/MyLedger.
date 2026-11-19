@@ -33,3 +33,5 @@
 .login-brand{color:var(--accent);font-weight:800;letter-spacing:.025em}
 .login-heading h1{margin-top:7px}
 #phone-message:not(:empty){margin-top:14px;color:var(--muted)}
+
+.google-sign-in{width:100%;margin-bottom:16px}

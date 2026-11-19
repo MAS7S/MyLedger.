@@ -12,7 +12,7 @@
 
   const messages = {
     ar: {
-      title:'تسجيل الدخول', email:'البريد الإلكتروني', password:'كلمة المرور',
+      title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
       signIn:'دخول بالبريد', create:'إنشاء حساب', phoneTitle:'الدخول بالجوال',
       share:'مشاركة MyLedger', recipient:'بريد الشخص المدعو', draft:'فتح رسالة الدعوة', copy:'نسخ رابط التطبيق',
       copied:'تم نسخ الرابط', subject:'جرّب MyLedger',
@@ -24,7 +24,7 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
-      title:'Sign in',email:'Email',password:'Password',signIn:'Sign in by email',
+      title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
       create:'Create account',phoneTitle:'Phone sign-in',share:'Share MyLedger',recipient:'Invitee email',
       draft:'Open invitation email',copy:'Copy app link',copied:'Link copied',subject:'Try MyLedger',
       invitation:'Try MyLedger to track your expenses. Open this link and create your own account:',
@@ -104,6 +104,7 @@
   function showSignInForm(copy) {
     dialog.classList.add('login-screen');
     dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
+      <button class="btn google-sign-in" id="google-sign-in" type="button">${copy.google}</button>
       <form id="email-auth" class="fields">
         <label class="field full">${copy.email}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${copy.password}<input name="password" type="password" autocomplete="current-password" required></label>
@@ -126,15 +127,34 @@
       <p role="status" id="phone-message"></p>`;
     dialog.setAttribute('aria-labelledby','phone-title');
     const message = dialog.querySelector('#phone-message');
+    const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
     const send = dialog.querySelector('#phone-send');
     const verify = dialog.querySelector('#phone-verify');
     let confirmation;
     if (!supported) {
+      google.disabled = true;
       email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
       dialog.querySelector('details').hidden = true;
       message.textContent = copy.origin;
     }
+    google.addEventListener('click',async () => {
+      if (handling || !supported) return;
+      handling = true;
+      google.disabled = true;
+      message.textContent = copy.pending;
+      try {
+        const {auth,authSdk} = await connect();
+        if (!dialog.open || !google.isConnected || auth.currentUser) return;
+        await authSdk.signInWithPopup(auth,new authSdk.GoogleAuthProvider());
+      } catch (error) {
+        message.textContent = error.code === 'auth/popup-closed-by-user'
+          ? '' : [copy.error,error.code].filter(Boolean).join(' · ');
+      } finally {
+        handling = false;
+        google.disabled = false;
+      }
+    });
     email.addEventListener('submit',async event => {
       event.preventDefault();
       if (handling) return;
