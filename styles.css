@@ -81,3 +81,7 @@ body:has(#account-auth[open] #email-auth){background:#f7f1f3}
 #create-account-toggle:hover{text-decoration:underline;text-underline-offset:3px}
 #account-auth:has(#email-auth) #account-message{margin:10px 0 0;color:var(--login-muted);font-size:.85rem;overflow-wrap:anywhere}
 #account-auth:has(#email-auth) #account-message:empty{display:none}
+
+.authorized-results li{flex-wrap:wrap}
+.authorized-actions{display:flex;flex-wrap:wrap;gap:6px}
+#authorized-status{overflow-wrap:anywhere}

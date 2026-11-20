@@ -12,7 +12,7 @@
 
   const messages = {
     ar: {
-      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
+      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', signupLinkNeeded:'افتح رابط الدعوة الخاص ببريدك من المالك لإنشاء الحساب.', signupLinkInvalid:'رابط الدعوة لم يعد صالحًا. اطلب الرابط الحالي من المالك.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
       accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
@@ -32,7 +32,7 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
-      createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
+      createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', signupLinkNeeded:'Open the invitation link from the owner to create an account with your email.', signupLinkInvalid:'This invitation link is no longer valid. Ask the owner for the current link.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
       accessRevoked:'Access revoked. Contact the owner for a new invitation.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
@@ -52,7 +52,6 @@
     }
   };
   const dialog = document.querySelector('#account-auth');
-  const signupCode = new URLSearchParams(location.hash.slice(1)).get('invite');
   const emulator = ['localhost','127.0.0.1'].includes(location.hostname);
   const supported = location.protocol === 'https:' || (emulator && location.protocol === 'http:');
   let connection;
@@ -346,8 +345,9 @@
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
-          if (!/^[0-9a-f]{32}$/.test(signupCode || '')) {
-            message.textContent = copy.signupDenied;
+          const signupCode = new URLSearchParams(location.hash.slice(1)).get('invite');
+          if (!validSignupCode(signupCode)) {
+            message.textContent = signupCode ? copy.signupLinkInvalid : copy.signupLinkNeeded;
             return;
           }
           let invitation;
@@ -356,7 +356,12 @@
           } catch (error) {
             if (error.code !== 'permission-denied') throw error;
           }
-          if (invitation?.data()?.email !== address) {
+          const invitedEmail = invitation?.data()?.email;
+          if (!invitedEmail) {
+            message.textContent = copy.signupLinkInvalid;
+            return;
+          }
+          if (invitedEmail !== address) {
             message.textContent = copy.signupDenied;
             return;
           }
@@ -406,13 +411,32 @@
       handling = false;
     }
   });
+  function validSignupCode(code) {
+    return typeof code === 'string' && /^[0-9a-f]{32}$/.test(code);
+  }
+
+  async function invitationLink({store,database}, recipient, existingOnly) {
+    const grant = store.doc(database,'accessInvites',recipient);
+    const code = await store.runTransaction(database,async tx => {
+      const current = (await tx.get(grant)).data();
+      if (current?.allowed === true && validSignupCode(current.signupCode)) return current.signupCode;
+      if (existingOnly && current?.allowed !== true) throw new Error('Access removed');
+      const generated = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+        byte => byte.toString(16).padStart(2,'0')).join('');
+      tx.set(grant,{allowed:true,signupCode:generated});
+      tx.set(store.doc(database,'signupInvites',generated),{email:recipient});
+      return generated;
+    });
+    const url = new URL(location.href);
+    url.search = '';
+    url.hash = 'invite=' + code;
+    return url.href;
+  }
+
   window.addEventListener('myledger-share-request',event => {
     if (!ownerAccess || location.protocol !== 'https:' || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
     const access = ownerAccess;
-    const url = new URL(location.href);
-    url.search = '';
-    url.hash = '';
     let appUrl = '';
     dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.share}</h2></div>
       <form id="invite" class="fields">
@@ -435,22 +459,12 @@
         status.textContent = copy.inviteFailed;
         return;
       }
-      const {store,database} = access;
       if (button.disabled) return;
       button.disabled = true;
       appUrl = '';
       dialog.querySelector('#copy-link').disabled = true;
       try {
-        const code = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
-        const grant = store.doc(database,'accessInvites',recipient);
-        await store.runTransaction(database,async tx => {
-          const previous = (await tx.get(grant)).data()?.signupCode;
-          if (previous) tx.delete(store.doc(database,'signupInvites',previous));
-          tx.set(grant,{allowed:true,signupCode:code});
-          tx.set(store.doc(database,'signupInvites',code),{email:recipient});
-        });
-        url.hash = 'invite=' + code;
-        appUrl = url.href;
+        appUrl = await invitationLink(access,recipient,false);
         dialog.querySelector('#copy-link').disabled = false;
         status.textContent = copy.invited + ' ' + recipient;
       } catch {
@@ -513,12 +527,35 @@
               value.dir = 'ltr';
               value.textContent = recipient;
               const remove = document.createElement('button');
+              const copyLink = document.createElement('button');
+              copyLink.type = 'button';
+              copyLink.className = 'btn';
+              copyLink.textContent = copy.copy;
+              copyLink.setAttribute('aria-label', copy.copy + ' · ' + recipient);
+              copyLink.addEventListener('click',async () => {
+                if (!stillOpen() || copyLink.disabled || remove.disabled) return;
+                copyLink.disabled = true;
+                try {
+                  const link = await invitationLink(access,recipient,true);
+                  if (!stillOpen()) return;
+                  try {
+                    await navigator.clipboard.writeText(link);
+                    if (stillOpen()) status.textContent = copy.copied;
+                  } catch {
+                    if (stillOpen()) status.textContent = link;
+                  }
+                } catch {
+                  if (stillOpen()) status.textContent = copy.inviteFailed;
+                } finally {
+                  copyLink.disabled = false;
+                }
+              });
               remove.type = 'button';
               remove.className = 'btn revoke-access';
               remove.textContent = copy.revoke;
               remove.setAttribute('aria-label', copy.revoke + ' · ' + recipient);
               remove.addEventListener('click', async () => {
-                if (!stillOpen() || remove.disabled ||
+                if (!stillOpen() || remove.disabled || copyLink.disabled ||
                     !window.confirm(copy.revokeConfirm + ' ' + recipient + '?')) return;
 
                 remove.disabled = true;
@@ -549,7 +586,10 @@
                   }
                 }
               });
-              item.append(value,remove);
+              const actions = document.createElement('div');
+              actions.className = 'authorized-actions';
+              actions.append(copyLink,remove);
+              item.append(value,actions);
               list.append(item);
             }
           } else {
