@@ -35,6 +35,11 @@ async function requireEmailAccess(rawEmail, uid, findOwnerByEmail = false) {
   throw denied();
 }
 
+exports.checkSignupAccess = onCall(async request => {
+  await requireEmailAccess(request.data?.email, undefined, true);
+  return { allowed: true };
+});
+
 exports.checkVerificationAccess = onCall(async request => {
   if (!request.auth) throw denied();
   const user = await auth.getUser(request.auth.uid);

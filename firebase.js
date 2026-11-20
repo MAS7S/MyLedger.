@@ -100,6 +100,7 @@
       }
       const services = {
         auth,authSdk,store,database,
+        checkSignup: functionsSdk.httpsCallable(functions,'checkSignupAccess'),
         checkVerification: functionsSdk.httpsCallable(functions,'checkVerificationAccess'),
         checkGoogle: functionsSdk.httpsCallable(functions,'checkGoogleAccess')
       };
@@ -404,7 +405,7 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk,checkVerification} = await connect();
+        const {auth,authSdk,checkSignup,checkVerification} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
@@ -412,6 +413,8 @@
             message.textContent = copy.signupDenied;
             return;
           }
+          await checkSignup({email:address});
+          if (!email.isConnected || auth.currentUser) return;
           const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
           try {
             await checkVerification();
