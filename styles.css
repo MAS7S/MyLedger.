@@ -83,5 +83,4 @@ body:has(#account-auth[open] #email-auth){background:#f7f1f3}
 #account-auth:has(#email-auth) #account-message:empty{display:none}
 
 .authorized-results li{flex-wrap:wrap}
-.authorized-actions{display:flex;flex-wrap:wrap;gap:6px}
 #authorized-status{overflow-wrap:anywhere}

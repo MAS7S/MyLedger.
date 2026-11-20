@@ -12,8 +12,8 @@
 
   const messages = {
     ar: {
-      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', signupLinkNeeded:'افتح رابط الدعوة الخاص ببريدك من المالك لإنشاء الحساب.', signupLinkInvalid:'رابط الدعوة لم يعد صالحًا. اطلب الرابط الحالي من المالك.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
-      accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
+      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
+      accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على صلاحية الوصول.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
       authorized:'المصرّح لهم', authorizedEmails:'الإيميلات',
@@ -21,8 +21,7 @@
       listError:'تعذّر تحميل القائمة. تأكّد من نشر قواعد Firestore الجديدة ثم أعد المحاولة.', retry:'إعادة المحاولة',
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
       signIn:'دخول بالبريد',
-      share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول', copy:'نسخ رابط الدعوة',
-      copied:'تم نسخ الرابط',
+      share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول',
 
       close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'لا توجد دعوة مطابقة لهذا الحساب. استخدم البريد الذي وافق عليه المالك.',
       confirmEmail:'أكّد ملكية بريدك لمتابعة الدخول.', sendVerification:'إرسال رابط التأكيد',
@@ -32,8 +31,8 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
-      createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', signupLinkNeeded:'Open the invitation link from the owner to create an account with your email.', signupLinkInvalid:'This invitation link is no longer valid. Ask the owner for the current link.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
-      accessRevoked:'Access revoked. Contact the owner for a new invitation.',
+      createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, select Create account if this is your first time, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
+      accessRevoked:'Access revoked. Contact the owner for access.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
       authorized:'Authorized people', authorizedEmails:'Email addresses',
@@ -41,7 +40,7 @@
       listError:'Could not load the list. Make sure the latest Firestore rules are published and try again.', retry:'Retry',
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
       share:'Grant access to MyLedger', method:'Access method',recipient:'Invitee email',
-      grant:'Grant access',copy:'Copy invitation link',copied:'Link copied',
+      grant:'Grant access',
 
       close:'Close',pending:'Checking access…',denied:'No invitation matches this account. Use the email approved by the owner.',
       confirmEmail:'Verify your email address to continue.',sendVerification:'Send verification link',
@@ -58,7 +57,7 @@
   let ownerAccess;
   let accessCheck = 0;
   let stopAccessWatch;
-  let accessRevoked = false;
+  let accessNotice;
   let handling = false;
   let currentUser;
 
@@ -101,10 +100,10 @@
     accountChanged(null);
     const copy = messages[document.documentElement.lang] || messages.ar;
     if (!user) {
-      if (accessRevoked || !dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
+      if (accessNotice || !dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
       return;
     }
-    accessRevoked = false;
+    accessNotice = undefined;
     showAccessStatus(copy,copy.pending,services);
     try {
       const token = await user.getIdTokenResult();
@@ -130,6 +129,7 @@
       }
       const permission = owner ? ownerRef : store.doc(database,'accessInvites',recipient);
       let active = false;
+      let authorized = false;
 
       const revoke = async () => {
         if (attempt !== accessCheck) return;
@@ -137,13 +137,13 @@
         stopAccessWatch?.();
         stopAccessWatch = undefined;
         ownerAccess = undefined;
-        accessRevoked = true;
+        accessNotice = authorized ? 'accessRevoked' : 'signupDenied';
         accountChanged(null);
         showSignInForm();
         try { await services.authSdk.signOut(auth); }
         catch (error) {
           if (auth.currentUser?.uid === user.uid) {
-            showAccessStatus(copy,copy.accessRevoked,services);
+            showAccessStatus(copy,copy[accessNotice],services);
           }
         }
       };
@@ -163,7 +163,7 @@
           return;
         }
         if (active) return;
-        active = true;
+        active = authorized = true;
         if (owner) ownerAccess = {store,database};
         if (dialog.open) dialog.close();
         accountChanged(ledgerAdapter(store,database,auth,user.uid,owner));
@@ -298,7 +298,7 @@
       <p role="status" id="account-message"></p>`;
     dialog.setAttribute('aria-labelledby','account-title');
     const message = dialog.querySelector('#account-message');
-    if (accessRevoked) message.textContent = copy.accessRevoked;
+    if (accessNotice) message.textContent = copy[accessNotice];
     const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
     const createToggle = dialog.querySelector('#create-account-toggle');
@@ -341,31 +341,10 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk,store,database} = await connect();
+        const {auth,authSdk} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
-          const signupCode = new URLSearchParams(location.hash.slice(1)).get('invite');
-          if (!validSignupCode(signupCode)) {
-            message.textContent = signupCode ? copy.signupLinkInvalid : copy.signupLinkNeeded;
-            return;
-          }
-          let invitation;
-          try {
-            invitation = await store.getDocFromServer(store.doc(database,'signupInvites',signupCode));
-          } catch (error) {
-            if (error.code !== 'permission-denied') throw error;
-          }
-          const invitedEmail = invitation?.data()?.email;
-          if (!invitedEmail) {
-            message.textContent = copy.signupLinkInvalid;
-            return;
-          }
-          if (invitedEmail !== address) {
-            message.textContent = copy.signupDenied;
-            return;
-          }
-          if (!email.isConnected || auth.currentUser) return;
           const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
           try { await authSdk.sendEmailVerification(result.user); } catch {}
           return;
@@ -387,7 +366,7 @@
       loginLanguage = loginLanguage === 'ar' ? 'en' : 'ar';
       try { localStorage.setItem(loginLanguageKey,loginLanguage); } catch {}
       applyLoginLanguage();
-      message.textContent = !supported ? copy.origin : accessRevoked ? copy.accessRevoked : '';
+      message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice] : '';
     });
 
     dialog.show();
@@ -411,40 +390,16 @@
       handling = false;
     }
   });
-  function validSignupCode(code) {
-    return typeof code === 'string' && /^[0-9a-f]{32}$/.test(code);
-  }
-
-  async function invitationLink({store,database}, recipient, existingOnly) {
-    const grant = store.doc(database,'accessInvites',recipient);
-    const code = await store.runTransaction(database,async tx => {
-      const current = (await tx.get(grant)).data();
-      if (current?.allowed === true && validSignupCode(current.signupCode)) return current.signupCode;
-      if (existingOnly && current?.allowed !== true) throw new Error('Access removed');
-      const generated = Array.from(crypto.getRandomValues(new Uint8Array(16)),
-        byte => byte.toString(16).padStart(2,'0')).join('');
-      tx.set(grant,{allowed:true,signupCode:generated});
-      tx.set(store.doc(database,'signupInvites',generated),{email:recipient});
-      return generated;
-    });
-    const url = new URL(location.href);
-    url.search = '';
-    url.hash = 'invite=' + code;
-    return url.href;
-  }
-
   window.addEventListener('myledger-share-request',event => {
     if (!ownerAccess || location.protocol !== 'https:' || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
     const access = ownerAccess;
-    let appUrl = '';
     dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.share}</h2></div>
       <form id="invite" class="fields">
         <label class="field full" id="invite-email-field">${copy.recipient}<input name="recipient" type="email" dir="ltr" required></label>
         <button class="btn primary" type="submit">${copy.grant}</button>
       </form>
       <div class="dialog-actions">
-        <button class="btn" id="copy-link" type="button" disabled>${copy.copy}</button>
         <form method="dialog"><button class="btn">${copy.close}</button></form>
       </div>
       <p role="status" id="share-message"></p>`;
@@ -461,25 +416,19 @@
       }
       if (button.disabled) return;
       button.disabled = true;
-      appUrl = '';
-      dialog.querySelector('#copy-link').disabled = true;
       try {
-        appUrl = await invitationLink(access,recipient,false);
-        dialog.querySelector('#copy-link').disabled = false;
+        const {store,database} = access;
+        const grant = store.doc(database,'accessInvites',recipient);
+        await store.runTransaction(database,async tx => {
+          const code = (await tx.get(grant)).data()?.signupCode;
+          if (code) tx.delete(store.doc(database,'signupInvites',code));
+          tx.set(grant,{allowed:true});
+        });
         status.textContent = copy.invited + ' ' + recipient;
       } catch {
         status.textContent = copy.inviteFailed;
       } finally {
         button.disabled = false;
-      }
-    });
-    dialog.querySelector('#copy-link').addEventListener('click',async () => {
-      const status = dialog.querySelector('#share-message');
-      try {
-        await navigator.clipboard.writeText(appUrl);
-        status.textContent = copy.copied;
-      } catch {
-        status.textContent = appUrl;
       }
     });
     dialog.showModal();
@@ -527,35 +476,12 @@
               value.dir = 'ltr';
               value.textContent = recipient;
               const remove = document.createElement('button');
-              const copyLink = document.createElement('button');
-              copyLink.type = 'button';
-              copyLink.className = 'btn';
-              copyLink.textContent = copy.copy;
-              copyLink.setAttribute('aria-label', copy.copy + ' · ' + recipient);
-              copyLink.addEventListener('click',async () => {
-                if (!stillOpen() || copyLink.disabled || remove.disabled) return;
-                copyLink.disabled = true;
-                try {
-                  const link = await invitationLink(access,recipient,true);
-                  if (!stillOpen()) return;
-                  try {
-                    await navigator.clipboard.writeText(link);
-                    if (stillOpen()) status.textContent = copy.copied;
-                  } catch {
-                    if (stillOpen()) status.textContent = link;
-                  }
-                } catch {
-                  if (stillOpen()) status.textContent = copy.inviteFailed;
-                } finally {
-                  copyLink.disabled = false;
-                }
-              });
               remove.type = 'button';
               remove.className = 'btn revoke-access';
               remove.textContent = copy.revoke;
               remove.setAttribute('aria-label', copy.revoke + ' · ' + recipient);
               remove.addEventListener('click', async () => {
-                if (!stillOpen() || remove.disabled || copyLink.disabled ||
+                if (!stillOpen() || remove.disabled ||
                     !window.confirm(copy.revokeConfirm + ' ' + recipient + '?')) return;
 
                 remove.disabled = true;
@@ -586,10 +512,7 @@
                   }
                 }
               });
-              const actions = document.createElement('div');
-              actions.className = 'authorized-actions';
-              actions.append(copyLink,remove);
-              item.append(value,actions);
+              item.append(value,remove);
               list.append(item);
             }
           } else {
