@@ -12,7 +12,7 @@
 
   const messages = {
     ar: {
-      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
+      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'هذا البريد غير مصرح له من قبل المالك.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
       accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على صلاحية الوصول.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
@@ -341,10 +341,20 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk} = await connect();
+        const {auth,authSdk,store,database} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
+          if (!address || address.includes('/') || address.length > 254) {
+            message.textContent = copy.signupDenied;
+            return;
+          }
+          const approval = await store.getDocFromServer(store.doc(database,'accessInvites',address));
+          if (approval.data()?.allowed !== true) {
+            message.textContent = copy.signupDenied;
+            return;
+          }
+          if (!email.isConnected || auth.currentUser) return;
           const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
           try { await authSdk.sendEmailVerification(result.user); } catch {}
           return;

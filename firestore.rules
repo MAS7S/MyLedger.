@@ -52,8 +52,8 @@ service cloud.firestore {
     match /accessInvites/{email} {
       allow list: if isOwner();
       allow delete: if isOwner();
-      allow get: if isOwner() || (hasVerifiedEmail()
-        && request.auth.token.email.lower() == email);
+      // Public lookups require an exact document ID. Only owners can query the collection.
+      allow get: if true;
       allow create, update: if isOwner() && isValidInvite(email, request.resource.data);
     }
 
