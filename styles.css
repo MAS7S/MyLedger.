@@ -47,3 +47,37 @@
 
 .login-brand-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #login-language{padding:6px 10px;font-size:.9rem}
+
+/* Login and invitation setup */
+body:has(#account-auth[open] #email-auth){background:#f7f1f3}
+#account-auth:has(#email-auth){
+  --login-accent:#87364b;--login-line:#e8dfe3;--login-muted:#665961;
+  width:min(408px,calc(100vw - 24px));padding:clamp(18px,5vw,30px);
+  max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--login-line);
+  border-radius:24px;background:#fffefd;color:#281e25;color-scheme:light;
+  box-shadow:0 16px 42px #49283812;
+}
+#account-auth:has(#email-auth) .login-heading{margin-bottom:14px}
+#account-auth:has(#email-auth) .login-brand{color:var(--login-accent);letter-spacing:0}
+#account-auth:has(#email-auth) h1{margin-top:12px;font-size:clamp(25px,5vw,35px);line-height:1.15}
+#account-auth:has(#email-auth) .btn{min-height:44px;border-radius:11px}
+#account-auth:has(#email-auth) :is(.google-sign-in,#login-language){background:#fff;border:1px solid var(--login-line);color:#281e25}
+#account-auth:has(#email-auth) .google-sign-in{margin:0;justify-content:center}
+#login-provider[hidden], #first-time-label[hidden]{display:none}
+.login-divider{display:flex;align-items:center;gap:10px;margin:12px 0;color:var(--login-muted);font-size:.8rem}
+.login-divider::before,.login-divider::after{content:"";height:1px;flex:1;background:var(--login-line)}
+#email-auth.fields{display:grid;grid-template-columns:minmax(0,1fr);gap:11px}
+#account-auth #email-auth .field{grid-column:1/-1}
+#account-auth #email-auth input{
+  min-height:44px;background:#fcfafb;color:#281e25;border:1px solid var(--login-line);
+  border-radius:10px;font-size:16px
+}
+#account-auth:has(#email-auth) :is(button,input):focus-visible{outline-color:var(--login-accent)}
+#account-auth #login-submit{width:100%;margin-top:3px;background:var(--login-accent);color:white;border-color:transparent;justify-content:center}
+.login-switch{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:0 4px;margin-top:16px;color:var(--login-muted);font-size:.87rem}
+#create-account-toggle{
+  min-height:44px;padding:5px;border:0;background:transparent;color:var(--login-accent);font-weight:700
+}
+#create-account-toggle:hover{text-decoration:underline;text-underline-offset:3px}
+#account-auth:has(#email-auth) #account-message{margin:10px 0 0;color:var(--login-muted);font-size:.85rem;overflow-wrap:anywhere}
+#account-auth:has(#email-auth) #account-message:empty{display:none}

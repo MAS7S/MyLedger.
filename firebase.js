@@ -12,7 +12,7 @@
 
   const messages = {
     ar: {
-      createAccount:'أول مرة؟ إنشاء حساب / تعيين كلمة المرور', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
+      createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
       accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
@@ -32,7 +32,7 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
-      createAccount:'First time? Create Account / Set Password', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
+      createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
       accessRevoked:'Access revoked. Contact the owner for a new invitation.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
@@ -255,6 +255,7 @@
 
   function showSignInForm() {
     let copy = messages[loginLanguage];
+    let creating = false;
     const label = key => `<span data-login-label="${key}">${copy[key]}</span>`;
     function applyLoginLanguage() {
       copy = messages[loginLanguage];
@@ -266,9 +267,16 @@
       const toggle = dialog.querySelector('#login-language');
       toggle.textContent = loginLanguage === 'ar' ? 'English' : 'العربية';
       toggle.lang = loginLanguage === 'ar' ? 'en' : 'ar';
+      dialog.querySelector('#account-title').textContent = creating ? copy.createAccount : copy.title;
+      dialog.querySelector('#login-submit').textContent = creating ? copy.setPassword : copy.title;
+      dialog.querySelector('#login-provider').hidden = creating;
+      dialog.querySelector('#first-time-label').hidden = creating;
+      dialog.querySelector('#create-account-toggle').textContent = creating ? copy.backToSignIn : copy.createAccount;
+      email.elements.password.autocomplete = creating ? 'new-password' : 'current-password';
     }
     dialog.classList.add('login-screen');
     dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="account-title">${label('title')}</h1></div>
+      <div id="login-provider">
       <button class="btn google-sign-in" id="google-sign-in" type="button">
         <svg class="google-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#4285F4" d="M43.61 24.46c0-1.36-.12-2.71-.35-4.04H24v7.65h11.02a9.42 9.42 0 0 1-4.08 6.18v5.13h6.61c3.86-3.55 6.06-8.77 6.06-14.92z"/>
@@ -278,23 +286,37 @@
         </svg>
         <span>${label('google')}</span>
       </button>
+      <div class="login-divider">${label('orEmail')}</div>
+      </div>
       <form id="email-auth" class="fields">
         <label class="field full">${label('email')}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${label('password')}<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="btn primary" type="submit" value="sign-in">${label('signIn')}</button>
-        <button class="btn" type="submit" value="create">${label('createAccount')}</button>
+        <button class="btn primary" type="submit" id="login-submit">${label('signIn')}</button>
       </form>
+      <div class="login-switch"><span id="first-time-label">${label('firstTime')}</span>
+        <button type="button" id="create-account-toggle">${label('createAccount')}</button>
+      </div>
       <p role="status" id="account-message"></p>`;
     dialog.setAttribute('aria-labelledby','account-title');
     const message = dialog.querySelector('#account-message');
     if (accessRevoked) message.textContent = copy.accessRevoked;
     const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
+    const createToggle = dialog.querySelector('#create-account-toggle');
     if (!supported) {
       google.disabled = true;
+      createToggle.disabled = true;
       email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
       message.textContent = copy.origin;
     }
+    createToggle.addEventListener('click',() => {
+      if (handling) return;
+      creating = !creating;
+      email.elements.password.value = '';
+      message.textContent = '';
+      applyLoginLanguage();
+      email.elements.email.focus();
+    });
     google.addEventListener('click',async () => {
       if (handling || !supported) return;
       handling = true;
@@ -323,7 +345,7 @@
         const {auth,authSdk,store,database} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
-        if (event.submitter?.value === 'create') {
+        if (creating) {
           if (!/^[0-9a-f]{32}$/.test(signupCode || '')) {
             message.textContent = copy.signupDenied;
             return;
