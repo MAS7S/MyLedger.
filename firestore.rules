@@ -54,7 +54,13 @@ service cloud.firestore {
       allow delete: if isOwner();
       // Public lookups require an exact document ID. Only owners can query the collection.
       allow get: if true;
-      allow create, update: if isOwner() && isValidInvite(email, request.resource.data);
+      allow create, update: if isOwner() && isValidInvite(email, request.resource.data)
+        && !exists(/databases/$(database)/documents/accessRevocations/$(email));
+    }
+
+    // Only the Worker service account can write deletion progress via IAM.
+    match /accessRevocations/{email} {
+      allow get, list: if isOwner();
     }
 
     // Old signup links are closed. Owners may remove the old record when modifying a grant.
@@ -73,3 +79,4 @@ service cloud.firestore {
     }
   }
 }
+

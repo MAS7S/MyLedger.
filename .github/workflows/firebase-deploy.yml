@@ -26,6 +26,7 @@ jobs:
           node-version: '24'
       - name: Deploy Hosting and Firestore rules
         env:
+          MYLEDGER_REVOCATION_URL: ${{ vars.MYLEDGER_REVOCATION_URL }}
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
           if [ -z "$FIREBASE_TOKEN" ]; then
@@ -33,3 +34,4 @@ jobs:
             exit 1
           fi
           npx --yes firebase-tools@15.37.0 deploy --only 'hosting,firestore:rules' --project my-ledger-8d0b3 --non-interactive
+

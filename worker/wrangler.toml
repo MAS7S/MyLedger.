@@ -1,0 +1,9 @@
+name = "myledger-revoke"
+main = "index.mjs"
+compatibility_date = "2025-11-01"
+workers_dev = true
+
+[vars]
+FIREBASE_PROJECT_ID = "my-ledger-8d0b3"
+FIREBASE_API_KEY = "AIzaSyD88lP9j0jCfoOs91fuaHn2AipUSHYe6Gk"
+ALLOWED_ORIGIN = "https://my-ledger-8d0b3.web.app"
