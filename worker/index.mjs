@@ -22,6 +22,7 @@ function validUid(uid) {
 }
 
 async function serviceAccessToken(env) {
+  if (!env.FIREBASE_SERVICE_ACCOUNT_JSON) throw new RequestError(503, 'service-account-unconfigured');
   const account = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT_JSON);
   if (account.project_id !== env.FIREBASE_PROJECT_ID) throw new Error('Service account project mismatch');
   const pem = account.private_key.replace(/-----[^-]+-----|\s/g, '');
@@ -182,6 +183,10 @@ async function revoke(api, owner, email) {
       }
       await api.deleteUser(uid);
     }
+  }
+  if (await api.findUser({ email: [email] })) {
+    // Keep the pending record until Firebase confirms the revoked email is absent.
+    throw new RequestError(409, 'account-still-present');
   }
   await api.commit([{ delete: pendingName, currentDocument: { updateTime: pending.updateTime } }]);
   return { accountDeleted: Boolean(uid) };

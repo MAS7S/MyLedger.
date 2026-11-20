@@ -16,6 +16,8 @@
   const messages = {
     ar: {
       createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'هذا البريد غير مصرح له من قبل المالك.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
+      signupCheckFailed:'تعذّر التحقق من صلاحية البريد الآن. أعد المحاولة.',
+      deletionUnavailable:'خدمة حذف الحساب غير مهيّأة. لم يُزل التصريح.',
       accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على صلاحية الوصول.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
@@ -40,6 +42,8 @@
     },
     en: {
       createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, select Create account if this is your first time, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
+      signupCheckFailed:'Could not check email authorization. Try again.',
+      deletionUnavailable:'Account deletion is unavailable. Access was not removed.',
       accessRevoked:'Access revoked. Contact the owner for access.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
@@ -358,11 +362,15 @@
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
-          if (!address || address.includes('/') || address.length > 254) {
+          if (!/^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/.test(address) || address.length > 254) {
             message.textContent = copy.signupDenied;
             return;
           }
-          const approval = await store.getDocFromServer(store.doc(database,'accessInvites',address));
+          const approval = await store.getDocFromServer(store.doc(database,'accessInvites',address)).catch(() => null);
+          if (!approval) {
+            message.textContent = copy.signupCheckFailed;
+            return;
+          }
           if (approval.data()?.allowed !== true) {
             message.textContent = copy.signupDenied;
             return;
@@ -506,35 +514,27 @@
             remove.setAttribute('aria-label', label + ' · ' + recipient);
             remove.addEventListener('click', async () => {
               if (!stillOpen() || remove.disabled ||
-                  !window.confirm((revocationEnabled ? copy.deleteConfirm : copy.revokeConfirm)
+                  !window.confirm(copy.deleteConfirm
                     + ' ' + recipient + '?')) return;
 
               remove.disabled = true;
               retry.hidden = true;
               status.textContent = revocationEnabled ? copy.deleting : '';
               try {
-                let accountDeleted = false;
-                if (revocationEnabled) {
-                  const token = await access.user.getIdToken(true);
-                  if (ownerAccess !== access) return;
-                  const response = await fetch(revocationOrigin + '/revoke', {
-                    method: 'POST',
-                    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: recipient })
-                  });
-                  const result = await response.json();
-                  if (!response.ok || typeof result.accountDeleted !== 'boolean') {
-                    throw new Error(result.code || 'service-error');
-                  }
-                  accountDeleted = result.accountDeleted;
-                } else {
-                  const grant = store.doc(database,'accessInvites',recipient);
-                  await store.runTransaction(database,async tx => {
-                    const code = (await tx.get(grant)).data()?.signupCode;
-                    if (code) tx.delete(store.doc(database,'signupInvites',code));
-                    tx.delete(grant);
-                  });
+                if (!revocationEnabled) throw new Error('deletion-unavailable');
+                const token = await access.user.getIdToken(true);
+                if (ownerAccess !== access) return;
+                const response = await fetch(revocationOrigin + '/revoke', {
+                  method: 'POST',
+                  redirect: 'error',
+                  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ email: recipient })
+                });
+                const result = await response.json();
+                if (!response.ok || typeof result.accountDeleted !== 'boolean') {
+                  throw new Error(result.code || 'service-error');
                 }
+                const accountDeleted = result.accountDeleted;
                 if (!stillOpen()) return;
                 const next = item.nextElementSibling || item.previousElementSibling;
                 item.remove();
@@ -549,7 +549,7 @@
               } catch (error) {
                 if (stillOpen()) {
                   status.textContent = error.message === 'protected-account' ? copy.protectedAccount
-                    : revocationEnabled ? copy.deleteError : copy.revokeError;
+                    : error.message === 'deletion-unavailable' ? copy.deletionUnavailable : copy.deleteError;
                   retry.hidden = !revocationEnabled;
                   remove.disabled = false;
                 }
