@@ -4,12 +4,12 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // accessOwners/{uid}: assigned by the Firebase administrator only.
     // accessInvites/{lowercaseEmail}: owner-managed {allowed: true}.
-    // accessPhoneInvites/{e164}: owner-managed {allowed: true}.
     // users/{uid}/ledger/current: bounded JSON payload and integer revision.
     function hasVerifiedEmail() {
       return request.auth != null
         && request.auth.token.email is string
-        && request.auth.token.email_verified == true;
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider in ['google.com', 'password'];
     }
 
     function isOwner() {
@@ -22,30 +22,22 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/accessInvites/$(email)).data.allowed == true;
     }
 
-    function hasPhoneLogin() {
-      return request.auth != null
-        && request.auth.token.firebase.sign_in_provider == 'phone'
-        && request.auth.token.phone_number is string;
-    }
-
-    function isPhoneInvited(phone) {
-      return exists(/databases/$(database)/documents/accessPhoneInvites/$(phone))
-        && get(/databases/$(database)/documents/accessPhoneInvites/$(phone)).data.allowed == true;
-    }
-
     function canUseLedger(uid) {
       return request.auth != null && request.auth.uid == uid
-        && (isOwner()
-          || (hasVerifiedEmail() && request.auth.token.firebase.sign_in_provider == 'google.com'
-            && isInvited(request.auth.token.email.lower()))
-          || (hasPhoneLogin() && isPhoneInvited(request.auth.token.phone_number)));
+        && (isOwner() || (hasVerifiedEmail()
+          && isInvited(request.auth.token.email.lower())));
+    }
+
+    function validSignupCode(code) {
+      return code is string && code.matches('^[0-9a-f]{32}$');
     }
 
     function isValidInvite(email, invite) {
       return email.size() <= 254
         && email == email.lower()
         && email.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$')
-        && invite.keys().hasOnly(['allowed'])
+        && invite.keys().hasOnly(['allowed', 'signupCode'])
+        && (!('signupCode' in invite) || validSignupCode(invite.signupCode))
         && invite.allowed == true;
     }
 
@@ -65,23 +57,24 @@ service cloud.firestore {
     match /accessInvites/{email} {
       allow list: if isOwner();
       allow delete: if isOwner();
-      allow get: if hasVerifiedEmail()
-        && request.auth.token.firebase.sign_in_provider == 'google.com'
-        && request.auth.token.email.lower() == email;
+      allow get: if isOwner() || (hasVerifiedEmail()
+        && request.auth.token.email.lower() == email);
       allow create, update: if isOwner() && isValidInvite(email, request.resource.data);
     }
 
-    function isValidPhoneInvite(phone, invite) {
-      return phone.matches('^[+][1-9][0-9]{7,14}$')
-        && invite.keys().hasOnly(['allowed'])
-        && invite.allowed == true;
-    }
-
-    match /accessPhoneInvites/{phone} {
-      allow list: if isOwner();
+    match /signupInvites/{code} {
+      function matchingGrant(address) {
+        let grant = get(/databases/$(database)/documents/accessInvites/$(address));
+        return grant.data.allowed == true && grant.data.signupCode == code;
+      }
+      allow get: if request.auth == null && validSignupCode(code)
+        && matchingGrant(resource.data.email);
+      allow create: if isOwner() && validSignupCode(code)
+        && request.resource.data.keys().hasOnly(['email'])
+        && request.resource.data.email is string
+        && request.resource.data.email == request.resource.data.email.lower()
+        && getAfter(/databases/$(database)/documents/accessInvites/$(request.resource.data.email)).data.signupCode == code;
       allow delete: if isOwner();
-      allow get: if hasPhoneLogin() && request.auth.token.phone_number == phone;
-      allow create, update: if isOwner() && isValidPhoneInvite(phone, request.resource.data);
     }
 
     match /users/{uid}/ledger/current {

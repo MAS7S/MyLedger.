@@ -12,20 +12,19 @@
 
   const messages = {
     ar: {
+      createAccount:'أول مرة؟ إنشاء حساب / تعيين كلمة المرور', signupDenied:'لم يمنح المالك هذا البريد صلاحية الوصول.', useSignup:'استخدم زر إنشاء حساب من رابط الدعوة، أو ادخل بحساب Google إذا سبق أن استخدمته.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
       accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
-      authorized:'المصرّح لهم', authorizedEmails:'الإيميلات', authorizedPhones:'أرقام الهاتف',
+      authorized:'المصرّح لهم', authorizedEmails:'الإيميلات',
       listLoading:'جارٍ تحميل القائمة…', listEmpty:'ما فيه بيانات في هذه القائمة.',
       listError:'تعذّر تحميل القائمة. تأكّد من نشر قواعد Firestore الجديدة ثم أعد المحاولة.', retry:'إعادة المحاولة',
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
-      signIn:'دخول بالبريد', 
-      share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول', copy:'نسخ رابط التطبيق',
+      signIn:'دخول بالبريد',
+      share:'منح الوصول إلى MyLedger', method:'نوع الإذن', recipient:'بريد الشخص المدعو', grant:'منح الوصول', copy:'نسخ رابط الدعوة',
       copied:'تم نسخ الرابط',
-      phone:'الدخول برقم الهاتف', phoneNumber:'رقم الهاتف مع مفتاح الدولة', sendCode:'إرسال رمز التحقق',
-      confirmCode:'تأكيد الرمز', code:'رمز التحقق', sent:'أدخل الرمز المرسل إلى رقمك.',
-      sharePhone:'رقم الهاتف',
-      close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'لا توجد دعوة مطابقة لهذا الحساب. استخدم البريد أو الرقم الذي وافق عليه المالك.',
+
+      close:'إغلاق', pending:'جارٍ التحقق من الدخول…', denied:'لا توجد دعوة مطابقة لهذا الحساب. استخدم البريد الذي وافق عليه المالك.',
       confirmEmail:'أكّد ملكية بريدك لمتابعة الدخول.', sendVerification:'إرسال رابط التأكيد',
       verificationSent:'أرسلنا رابط التأكيد. افتحه ثم اضغط «تحقّق مجددًا».', checkAgain:'تحقّق مجددًا',
       signOut:'استخدام حساب آخر', inviteFailed:'تعذّر منح الوصول.', invited:'تم منح الوصول لـ',
@@ -33,19 +32,18 @@
       error:'تعذّر إكمال تسجيل الدخول', out:'تعذّر تسجيل الخروج'
     },
     en: {
+      createAccount:'First time? Create Account / Set Password', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, use Create Account from your invitation link, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
       accessRevoked:'Access revoked. Contact the owner for a new invitation.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
-      authorized:'Authorized people', authorizedEmails:'Email addresses', authorizedPhones:'Phone numbers',
+      authorized:'Authorized people', authorizedEmails:'Email addresses',
       listLoading:'Loading approved entries…', listEmpty:'No approved entries in this list.',
       listError:'Could not load the list. Make sure the latest Firestore rules are published and try again.', retry:'Retry',
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
       share:'Grant access to MyLedger', method:'Access method',recipient:'Invitee email',
-      grant:'Grant access',copy:'Copy app link',copied:'Link copied',
-      phone:'Sign in by phone', phoneNumber:'Phone number with country code', sendCode:'Send verification code',
-      confirmCode:'Verify code', code:'Verification code', sent:'Enter the code sent to your phone.',
-      sharePhone:'Phone number',
-      close:'Close',pending:'Checking access…',denied:'No invitation matches this account. Use the email or phone number approved by the owner.',
+      grant:'Grant access',copy:'Copy invitation link',copied:'Link copied',
+
+      close:'Close',pending:'Checking access…',denied:'No invitation matches this account. Use the email approved by the owner.',
       confirmEmail:'Verify your email address to continue.',sendVerification:'Send verification link',
       verificationSent:'Open the link in your inbox, then select Check again.',checkAgain:'Check again',
       signOut:'Use another account',inviteFailed:'Could not grant access.',invited:'Access granted to',
@@ -53,13 +51,12 @@
       error:'Could not complete sign-in',out:'Could not sign out'
     }
   };
-  const dialog = document.querySelector('#phone-auth');
+  const dialog = document.querySelector('#account-auth');
+  const signupCode = new URLSearchParams(location.hash.slice(1)).get('invite');
   const emulator = ['localhost','127.0.0.1'].includes(location.hostname);
   const supported = location.protocol === 'https:' || (emulator && location.protocol === 'http:');
   let connection;
   let ownerAccess;
-  let phoneVerifier;
-  const phonePattern = /^[+][1-9][0-9]{7,14}$/;
   let accessCheck = 0;
   let stopAccessWatch;
   let accessRevoked = false;
@@ -114,9 +111,12 @@
       const token = await user.getIdTokenResult();
       if (attempt !== accessCheck) return;
       const provider = token.signInProvider;
+      if (!['google.com','password'].includes(provider)) {
+        showAccessStatus(copy,copy.denied,services);
+        return;
+      }
       const verifiedEmail = token.claims.email_verified === true;
-      const phone = provider === 'phone' && token.claims.phone_number;
-      if (!verifiedEmail && !phone) {
+      if (!verifiedEmail) {
         showAccessStatus(copy,copy.confirmEmail,services,Boolean(user.email));
         return;
       }
@@ -124,13 +124,12 @@
       const owner = verifiedEmail && (await store.getDocFromServer(ownerRef)).exists();
       if (attempt !== accessCheck) return;
       const email = verifiedEmail && token.claims.email?.trim().toLowerCase();
-      const recipient = provider === 'google.com' && email && !email.includes('/') ? email : phone;
+      const recipient = email && !email.includes('/') ? email : null;
       if (!owner && !recipient) {
         showAccessStatus(copy,copy.denied,services);
         return;
       }
-      const collection = phone ? 'accessPhoneInvites' : 'accessInvites';
-      const permission = owner ? ownerRef : store.doc(database,collection,recipient);
+      const permission = owner ? ownerRef : store.doc(database,'accessInvites',recipient);
       let active = false;
 
       const revoke = async () => {
@@ -188,15 +187,15 @@
   function showAccessStatus(copy,text,services,unverified=false,retry=false) {
     if (dialog.open) dialog.close();
     dialog.classList.add('login-screen');
-    dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="phone-title">${copy.title}</h1></div>
-      <p id="phone-message" role="status"></p>
+    dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="account-title">${copy.title}</h1></div>
+      <p id="account-message" role="status"></p>
       <div class="dialog-actions">
         ${unverified ? `<button class="btn primary" id="send-verification">${copy.sendVerification}</button>` : ''}
         ${unverified || retry ? `<button class="btn" id="retry-access">${copy.checkAgain}</button>` : ''}
         <button class="btn" id="other-account">${copy.signOut}</button>
       </div>`;
-    dialog.setAttribute('aria-labelledby','phone-title');
-    const status = dialog.querySelector('#phone-message');
+    dialog.setAttribute('aria-labelledby','account-title');
+    const status = dialog.querySelector('#account-message');
     status.textContent = text;
     const {auth,authSdk} = services;
     const user = auth.currentUser;
@@ -269,7 +268,7 @@
       toggle.lang = loginLanguage === 'ar' ? 'en' : 'ar';
     }
     dialog.classList.add('login-screen');
-    dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="phone-title">${label('title')}</h1></div>
+    dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="account-title">${label('title')}</h1></div>
       <button class="btn google-sign-in" id="google-sign-in" type="button">
         <svg class="google-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#4285F4" d="M43.61 24.46c0-1.36-.12-2.71-.35-4.04H24v7.65h11.02a9.42 9.42 0 0 1-4.08 6.18v5.13h6.61c3.86-3.55 6.06-8.77 6.06-14.92z"/>
@@ -283,21 +282,11 @@
         <label class="field full">${label('email')}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
         <label class="field full">${label('password')}<input name="password" type="password" autocomplete="current-password" required></label>
         <button class="btn primary" type="submit" value="sign-in">${label('signIn')}</button>
+        <button class="btn" type="submit" value="create">${label('createAccount')}</button>
       </form>
-      <details class="auth-phone"><summary>${label('phone')}</summary>
-        <form id="phone-send" class="fields">
-          <label class="field full">${label('phoneNumber')}<input name="phone" type="tel" dir="ltr" autocomplete="tel" placeholder="+16505553434" pattern="[+][1-9][0-9]{7,14}" required></label>
-          <div id="phone-captcha" class="full"></div>
-          <button class="btn primary" type="submit">${label('sendCode')}</button>
-        </form>
-        <form id="phone-verify" class="fields" hidden>
-          <label class="field full">${label('code')}<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label>
-          <button class="btn primary" type="submit">${label('confirmCode')}</button>
-        </form>
-      </details>
-      <p role="status" id="phone-message"></p>`;
-    dialog.setAttribute('aria-labelledby','phone-title');
-    const message = dialog.querySelector('#phone-message');
+      <p role="status" id="account-message"></p>`;
+    dialog.setAttribute('aria-labelledby','account-title');
+    const message = dialog.querySelector('#account-message');
     if (accessRevoked) message.textContent = copy.accessRevoked;
     const google = dialog.querySelector('#google-sign-in');
     const email = dialog.querySelector('#email-auth');
@@ -331,11 +320,35 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk} = await connect();
+        const {auth,authSdk,store,database} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
-        await authSdk.signInWithEmailAndPassword(auth,email.elements.email.value.trim(),email.elements.password.value);
+        const address = email.elements.email.value.trim().toLowerCase();
+        if (event.submitter?.value === 'create') {
+          if (!/^[0-9a-f]{32}$/.test(signupCode || '')) {
+            message.textContent = copy.signupDenied;
+            return;
+          }
+          let invitation;
+          try {
+            invitation = await store.getDocFromServer(store.doc(database,'signupInvites',signupCode));
+          } catch (error) {
+            if (error.code !== 'permission-denied') throw error;
+          }
+          if (invitation?.data()?.email !== address) {
+            message.textContent = copy.signupDenied;
+            return;
+          }
+          if (!email.isConnected || auth.currentUser) return;
+          const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
+          try { await authSdk.sendEmailVerification(result.user); } catch {}
+          return;
+        }
+        await authSdk.signInWithEmailAndPassword(auth,address,email.elements.password.value);
       } catch (error) {
-        message.textContent = [copy.error,error.code].filter(Boolean).join(' · ');
+        const code = error.code;
+        message.textContent = code === 'auth/email-already-in-use' ? copy.signupExisting
+          : ['auth/invalid-credential','auth/user-not-found','auth/wrong-password'].includes(code) ? copy.useSignup
+          : [copy.error,code].filter(Boolean).join(' · ');
       } finally {
         handling = false;
         buttons.forEach(button => { button.disabled = false; });
@@ -347,44 +360,13 @@
       loginLanguage = loginLanguage === 'ar' ? 'en' : 'ar';
       try { localStorage.setItem(loginLanguageKey,loginLanguage); } catch {}
       applyLoginLanguage();
-      message.textContent = !supported ? copy.origin : dialog.querySelector('#phone-verify').hidden ? '' : copy.sent;
+      message.textContent = !supported ? copy.origin : accessRevoked ? copy.accessRevoked : '';
     });
-    if (supported) wirePhoneForms(() => copy,message);
-    else dialog.querySelector('details').hidden = true;
+
     dialog.show();
   }
 
-  function wirePhoneForms(getCopy,message) {
-    const send = dialog.querySelector('#phone-send');
-    const verify = dialog.querySelector('#phone-verify');
-    let confirmation;
-    const onSubmit = (form,work) => form.addEventListener('submit',async event => {
-      event.preventDefault();
-      if (handling) return;
-      const button = form.querySelector('button');
-      handling = true;
-      button.disabled = true;
-      try { await work(); }
-      catch (error) { message.textContent = [getCopy().error,error.code].filter(Boolean).join(' · '); }
-      finally { handling = false; button.disabled = false; }
-    });
-    onSubmit(send,async () => {
-      const {auth,authSdk} = await connect();
-      if (!send.isConnected || auth.currentUser) return;
-      phoneVerifier?.clear();
-      phoneVerifier = new authSdk.RecaptchaVerifier(auth,'phone-captcha',{size:'invisible'});
-      confirmation = await authSdk.signInWithPhoneNumber(auth,send.elements.phone.value,phoneVerifier);
-      send.hidden = true;
-      verify.hidden = false;
-      message.textContent = getCopy().sent;
-      verify.elements.code.focus();
-    });
-    onSubmit(verify,() => confirmation.confirm(verify.elements.code.value));
-  }
-
   dialog.addEventListener('close',() => {
-    phoneVerifier?.clear();
-    phoneVerifier = undefined;
     if (!dialog.open) dialog.classList.remove('login-screen');
   });
 
@@ -409,47 +391,45 @@
     const url = new URL(location.href);
     url.search = '';
     url.hash = '';
-    const appUrl = url.href;
-    dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.share}</h2></div>
+    let appUrl = '';
+    dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.share}</h2></div>
       <form id="invite" class="fields">
-        <label class="field full">${copy.method}<select name="method">
-          <option value="email">${copy.email}</option><option value="phone">${copy.sharePhone}</option>
-        </select></label>
-        <label class="field full" id="invite-phone-field" hidden>${copy.phoneNumber}<input name="phone" type="tel" dir="ltr" pattern="[+][1-9][0-9]{7,14}" required disabled></label>
         <label class="field full" id="invite-email-field">${copy.recipient}<input name="recipient" type="email" dir="ltr" required></label>
         <button class="btn primary" type="submit">${copy.grant}</button>
       </form>
       <div class="dialog-actions">
-        <button class="btn" id="copy-link" type="button">${copy.copy}</button>
+        <button class="btn" id="copy-link" type="button" disabled>${copy.copy}</button>
         <form method="dialog"><button class="btn">${copy.close}</button></form>
       </div>
       <p role="status" id="share-message"></p>`;
-    dialog.setAttribute('aria-labelledby','phone-title');
+    dialog.setAttribute('aria-labelledby','account-title');
     const form = dialog.querySelector('#invite');
-    function updateInviteMethod() {
-      const phone = form.elements.method.value === 'phone';
-      dialog.querySelector('#invite-phone-field').hidden = !phone;
-      dialog.querySelector('#invite-email-field').hidden = phone;
-      form.elements.phone.disabled = !phone;
-      form.elements.recipient.disabled = phone;
-    }
-    form.elements.method.addEventListener('change',updateInviteMethod);
-    updateInviteMethod();
     form.addEventListener('submit',async event => {
       event.preventDefault();
       const button = form.querySelector('button');
       const status = dialog.querySelector('#share-message');
-      const byPhone = form.elements.method.value === 'phone';
-      const recipient = byPhone ? form.elements.phone.value.trim() : form.elements.recipient.value.trim().toLowerCase();
-      if (ownerAccess !== access || (byPhone ? !phonePattern.test(recipient) : recipient.includes('/') || recipient.length > 254)) {
+      const recipient = form.elements.recipient.value.trim().toLowerCase();
+      if (ownerAccess !== access || recipient.includes('/') || recipient.length > 254) {
         status.textContent = copy.inviteFailed;
         return;
       }
       const {store,database} = access;
       if (button.disabled) return;
       button.disabled = true;
+      appUrl = '';
+      dialog.querySelector('#copy-link').disabled = true;
       try {
-        await store.setDoc(store.doc(database,byPhone ? 'accessPhoneInvites' : 'accessInvites',recipient),{allowed:true});
+        const code = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
+        const grant = store.doc(database,'accessInvites',recipient);
+        await store.runTransaction(database,async tx => {
+          const previous = (await tx.get(grant)).data()?.signupCode;
+          if (previous) tx.delete(store.doc(database,'signupInvites',previous));
+          tx.set(grant,{allowed:true,signupCode:code});
+          tx.set(store.doc(database,'signupInvites',code),{email:recipient});
+        });
+        url.hash = 'invite=' + code;
+        appUrl = url.href;
+        dialog.querySelector('#copy-link').disabled = false;
         status.textContent = copy.invited + ' ' + recipient;
       } catch {
         status.textContent = copy.inviteFailed;
@@ -474,17 +454,16 @@
     const {store,database} = access;
     const copy = messages[event.detail] || messages.ar;
     const collections = [
-      ['accessInvites',copy.authorizedEmails],
-      ['accessPhoneInvites',copy.authorizedPhones]
+      ['accessInvites',copy.authorizedEmails]
     ];
-    dialog.innerHTML = `<div class="dialog-title"><h2 id="phone-title">${copy.authorized}</h2></div>
+    dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.authorized}</h2></div>
       <p id="authorized-status" role="status"></p>
       <div id="authorized-results" class="authorized-results"></div>
       <div class="dialog-actions">
         <button type="button" id="retry-authorized" class="btn" hidden>${copy.retry}</button>
         <form method="dialog"><button class="btn">${copy.close}</button></form>
       </div>`;
-    dialog.setAttribute('aria-labelledby','phone-title');
+    dialog.setAttribute('aria-labelledby','account-title');
     const status = dialog.querySelector('#authorized-status');
     const results = dialog.querySelector('#authorized-results');
     const retry = dialog.querySelector('#retry-authorized');
@@ -524,7 +503,12 @@
                 status.textContent = '';
                 try {
                   const [collection] = collections[index];
-                  await store.deleteDoc(store.doc(database,collection,recipient));
+                  const grant = store.doc(database,collection,recipient);
+                  await store.runTransaction(database,async tx => {
+                    const code = (await tx.get(grant)).data()?.signupCode;
+                    if (code) tx.delete(store.doc(database,'signupInvites',code));
+                    tx.delete(grant);
+                  });
                   if (!stillOpen()) return;
                   const next = item.nextElementSibling || item.previousElementSibling;
                   item.remove();
