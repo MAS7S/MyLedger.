@@ -1,35 +1,32 @@
-
 # MyLedger
 
-Email and Google access use the existing Firestore records. Administrators assign
-owners with `accessOwners/{uid}`. Owners invite addresses through the app, which
-creates `accessInvites/{lowercaseEmail}` with `allowed: true`. An administrator
-can bootstrap a new owner by inviting the address, letting the user register,
-then assigning their UID in `accessOwners`.
+The browser checks the exact normalized email in Firestore before creating a
+password account, sending a verification email, or exchanging a Google Identity
+Services credential for a Firebase session. Firebase Authentication validates
+the original Google credential. Verified Firebase sessions still need an
+active invitation or an owner UID to access ledger data under Firestore rules.
 
-Google Identity Services supplies a Google ID token. The backend verifies the
-token for the project's Web client ID and checks Firestore before the browser
-exchanges it for a Firebase session. Firebase Auth blocking functions check access
-before email account creation and email or Google sign-in. The app checks access
-again before sending a verification email. Email invitees must verify their
-address before accessing their ledger.
+Owners grant email access through the app. Firestore checks
+`accessInvites/{lowercaseEmail}` for an active invitation. Owner privileges
+come from administrator-assigned `accessOwners/{uid}` records. A verified owner
+session also registers `accessOwnerEmails/{lowercaseEmail}` with the owner's
+`uid` for the before-sign-in check. To provision an existing owner who cannot
+sign in yet, the administrator can create that mapping using the verified
+email and its existing owner UID.
 
-## Deploy to Firebase
+`signupChecks/{lowercaseEmail}` is a rules-only lookup. Leave that collection
+empty. It exposes whether an exact address is eligible, while collection
+queries and direct reads of private authorization records remain restricted.
+A client using Firebase Authentication directly can skip the app's preflight.
+Firestore still enforces authorization for ledger access.
 
-1. Enable Firebase Authentication with Identity Platform and confirm the project
-   has the Blaze plan. Keep the Google and Email/Password providers enabled.
-2. In the Web OAuth client, authorize the JavaScript origins used for Hosting,
-   including `https://my-ledger-8d0b3.web.app` and
-   `https://my-ledger-8d0b3.firebaseapp.com` if both are used.
-3. Install server dependencies and deploy the functions before the frontend.
+## Deploy to Firebase Hosting
 
-   ```sh
-   npm ci --prefix functions
-   firebase deploy --project my-ledger-8d0b3 --only functions
-   firebase deploy --project my-ledger-8d0b3 --only firestore:rules,hosting
-   ```
+Keep the Google and Email/Password providers enabled. Authorize the Hosting
+origins you use in the project's Google Web OAuth client, including
+`https://my-ledger-8d0b3.web.app` and `https://my-ledger-8d0b3.firebaseapp.com`
+if you use both.
 
-4. In Authentication settings, confirm that the creation and sign-in blocking
-   functions are registered. Test an invited account, a non-invited account,
-   and an existing owner. Check that a rejected registration creates no Auth
-   account and that an email invitee can use the ledger after verification.
+```sh
+firebase deploy --project my-ledger-8d0b3 --only firestore:rules,hosting
+```

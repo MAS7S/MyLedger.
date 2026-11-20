@@ -86,24 +86,16 @@
     connection = Promise.all([
       import(base + 'firebase-app.js'),
       import(base + 'firebase-auth.js'),
-      import(base + 'firebase-firestore.js'),
-      import(base + 'firebase-functions.js')
-    ]).then(([core,authSdk,store,functionsSdk]) => {
+      import(base + 'firebase-firestore.js')
+    ]).then(([core,authSdk,store]) => {
       const firebase = core.initializeApp(config);
       const auth = authSdk.getAuth(firebase);
       const database = store.getFirestore(firebase);
-      const functions = functionsSdk.getFunctions(firebase);
       if (emulator) {
         authSdk.connectAuthEmulator(auth,'http://' + location.hostname + ':9099');
         store.connectFirestoreEmulator(database,location.hostname,8080);
-        functionsSdk.connectFunctionsEmulator(functions,location.hostname,5001);
       }
-      const services = {
-        auth,authSdk,store,database,
-        checkSignup: functionsSdk.httpsCallable(functions,'checkSignupAccess'),
-        checkVerification: functionsSdk.httpsCallable(functions,'checkVerificationAccess'),
-        checkGoogle: functionsSdk.httpsCallable(functions,'checkGoogleAccess')
-      };
+      const services = {auth,authSdk,store,database};
       authSdk.onAuthStateChanged(auth,user => void checkAccess(services,user));
       return services;
     }).catch(error => {
@@ -137,8 +129,39 @@
     return googleLibrary;
   }
 
+  function accessDenied() {
+    return Object.assign(new Error('Access denied'),{code:'myledger/access-denied'});
+  }
+
+  async function checkEmailAccess({store,database},rawEmail) {
+    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
+    if (email.length > 254 || !/^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/.test(email)) throw accessDenied();
+    try {
+      const check = await store.getDocFromServer(store.doc(database,'signupChecks',email));
+      if (check.exists()) throw accessDenied();
+    } catch (error) {
+      if (error.code === 'permission-denied') throw accessDenied();
+      throw error;
+    }
+  }
+
+  function googleEmail(credential) {
+    try {
+      const segments = credential.split('.');
+      if (segments.length !== 3) throw accessDenied();
+      const encoded = segments[1].replace(/-/g,'+').replace(/_/g,'/');
+      const bytes = Uint8Array.from(atob(encoded),character => character.charCodeAt(0));
+      const claims = JSON.parse(new TextDecoder().decode(bytes));
+      // These claims select the preflight lookup. Firebase validates the original credential.
+      if (claims.aud === googleClientId && claims.email_verified === true) return claims.email;
+    } catch {
+      throw accessDenied();
+    }
+    throw accessDenied();
+  }
+
   function authError(copy,error) {
-    return error.code === 'functions/permission-denied' || error.message?.includes('MyLedger access denied.')
+    return error.code === 'myledger/access-denied'
       ? copy.denied : [copy.error,error.code].filter(Boolean).join(' · ');
   }
 
@@ -184,6 +207,11 @@
         return;
       }
       const permission = owner ? ownerRef : store.doc(database,'accessInvites',recipient);
+      if (owner && recipient) {
+        // Existing owners can enable future Google preflight using their verified email.
+        const ownerEmail = store.doc(database,'accessOwnerEmails',recipient);
+        void store.setDoc(ownerEmail,{uid:user.uid}).catch(() => {});
+      }
       let active = false;
       let authorized = false;
 
@@ -263,7 +291,7 @@
     });
     onClick('#other-account',() => authSdk.signOut(auth));
     onClick('#send-verification',async () => {
-      await services.checkVerification();
+      await checkEmailAccess(services,user.email);
       if (auth.currentUser !== user || !status.isConnected) return;
       await authSdk.sendEmailVerification(user);
       status.textContent = copy.verificationSent;
@@ -381,9 +409,10 @@
           handling = true;
           message.textContent = copy.pending;
           try {
-            const {auth,authSdk,checkGoogle} = await connect();
+            const services = await connect();
+            const {auth,authSdk} = services;
             if (!google.isConnected || auth.currentUser) return;
-            await checkGoogle({credential});
+            await checkEmailAccess(services,googleEmail(credential));
             if (!google.isConnected || auth.currentUser) return;
             await authSdk.signInWithCredential(auth,authSdk.GoogleAuthProvider.credential(credential));
           } catch (error) {
@@ -405,7 +434,8 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk,checkSignup,checkVerification} = await connect();
+        const services = await connect();
+        const {auth,authSdk} = services;
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
@@ -413,11 +443,11 @@
             message.textContent = copy.signupDenied;
             return;
           }
-          await checkSignup({email:address});
+          await checkEmailAccess(services,address);
           if (!email.isConnected || auth.currentUser) return;
           const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
           try {
-            await checkVerification();
+            await checkEmailAccess(services,result.user.email);
             if (auth.currentUser === result.user) await authSdk.sendEmailVerification(result.user);
           } catch {
             // The verification screen lets the user retry the access check and send.

@@ -24,8 +24,6 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
-      - name: Install Functions dependencies
-        run: npm ci --prefix functions
       - name: Deploy Firebase resources
         env:
           MYLEDGER_REVOCATION_URL: ${{ vars.MYLEDGER_REVOCATION_URL }}
@@ -35,6 +33,5 @@ jobs:
             echo "::error::Add FIREBASE_TOKEN to this repository's Actions secrets."
             exit 1
           fi
-          npx --yes firebase-tools@15.37.0 deploy --only functions --project my-ledger-8d0b3 --non-interactive
           npx --yes firebase-tools@15.37.0 deploy --only 'hosting,firestore:rules' --project my-ledger-8d0b3 --non-interactive
 

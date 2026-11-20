@@ -45,6 +45,38 @@ service cloud.firestore {
         && ledger.payload.size() <= 700000;
     }
 
+    // A missing document is readable only when the exact address is approved.
+    // No invitation or owner records are returned by this lookup.
+    match /signupChecks/{email} {
+      allow get: if resource == null
+        && email.size() <= 254 && email == email.lower()
+        && email.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$')
+        && (request.auth == null || hasMatchingEmail(email))
+        && (isInvited(email) || isRegisteredOwnerEmail(email)
+          || (hasMatchingEmail(email)
+            && exists(/databases/$(database)/documents/accessOwners/$(request.auth.uid))));
+    }
+
+    function hasMatchingEmail(email) {
+      return request.auth != null && request.auth.token.email is string
+        && request.auth.token.email.lower() == email;
+    }
+
+    function isRegisteredOwnerEmail(email) {
+      let path = /databases/$(database)/documents/accessOwnerEmails/$(email);
+      return exists(path)
+        && exists(/databases/$(database)/documents/accessOwners/$(get(path).data.uid));
+    }
+
+    function isValidOwnerEmail(email, entry) {
+      return isOwner() && hasMatchingEmail(email)
+        && entry.keys().hasOnly(['uid']) && entry.uid == request.auth.uid;
+    }
+
+    match /accessOwnerEmails/{email} {
+      allow create, update: if isValidOwnerEmail(email, request.resource.data);
+    }
+
     match /accessOwners/{uid} {
       allow get: if hasVerifiedEmail() && request.auth.uid == uid;
     }
