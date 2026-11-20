@@ -10,6 +10,7 @@
     appId: '1:572111662694:web:43315347b4d875e8e5c7a7'
   };
 
+  const googleClientId = '572111662694-ak1lh2f7tf8ief2d011vj4kb03k1apb5.apps.googleusercontent.com';
   const revocationOrigin = "__MYLEDGER_REVOCATION_URL__";
   const revocationEnabled = revocationOrigin.startsWith("https://");
 
@@ -71,6 +72,7 @@
   const emulator = ['localhost','127.0.0.1'].includes(location.hostname);
   const supported = location.protocol === 'https:' || (emulator && location.protocol === 'http:');
   let connection;
+  let googleLibrary;
   let ownerAccess;
   let accessCheck = 0;
   let stopAccessWatch;
@@ -84,16 +86,23 @@
     connection = Promise.all([
       import(base + 'firebase-app.js'),
       import(base + 'firebase-auth.js'),
-      import(base + 'firebase-firestore.js')
-    ]).then(([core,authSdk,store]) => {
+      import(base + 'firebase-firestore.js'),
+      import(base + 'firebase-functions.js')
+    ]).then(([core,authSdk,store,functionsSdk]) => {
       const firebase = core.initializeApp(config);
       const auth = authSdk.getAuth(firebase);
       const database = store.getFirestore(firebase);
+      const functions = functionsSdk.getFunctions(firebase);
       if (emulator) {
         authSdk.connectAuthEmulator(auth,'http://' + location.hostname + ':9099');
         store.connectFirestoreEmulator(database,location.hostname,8080);
+        functionsSdk.connectFunctionsEmulator(functions,location.hostname,5001);
       }
-      const services = {auth,authSdk,store,database};
+      const services = {
+        auth,authSdk,store,database,
+        checkVerification: functionsSdk.httpsCallable(functions,'checkVerificationAccess'),
+        checkGoogle: functionsSdk.httpsCallable(functions,'checkGoogleAccess')
+      };
       authSdk.onAuthStateChanged(auth,user => void checkAccess(services,user));
       return services;
     }).catch(error => {
@@ -101,6 +110,35 @@
       throw error;
     });
     return connection;
+  }
+
+  function loadGoogleIdentity() {
+    if (googleLibrary) return googleLibrary;
+    googleLibrary = new Promise((resolve,reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      const failed = () => {
+        script.remove();
+        reject(new Error('Could not load Google Identity Services'));
+      };
+      script.onload = () => {
+        const identity = window.google?.accounts?.id;
+        if (identity) resolve(identity);
+        else failed();
+      };
+      script.onerror = failed;
+      document.head.append(script);
+    }).catch(error => {
+      googleLibrary = undefined;
+      throw error;
+    });
+    return googleLibrary;
+  }
+
+  function authError(copy,error) {
+    return error.code === 'functions/permission-denied' || error.message?.includes('MyLedger access denied.')
+      ? copy.denied : [copy.error,error.code].filter(Boolean).join(' · ');
   }
 
   function accountChanged(detail) {
@@ -219,11 +257,13 @@
       const button = event.currentTarget;
       button.disabled = true;
       try { await work(); }
-      catch (error) { status.textContent = [copy.error,error.code].filter(Boolean).join(' · '); }
+      catch (error) { status.textContent = authError(copy,error); }
       finally { button.disabled = false; }
     });
     onClick('#other-account',() => authSdk.signOut(auth));
     onClick('#send-verification',async () => {
+      await services.checkVerification();
+      if (auth.currentUser !== user || !status.isConnected) return;
       await authSdk.sendEmailVerification(user);
       status.textContent = copy.verificationSent;
     });
@@ -293,15 +333,7 @@
     dialog.classList.add('login-screen');
     dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="account-title">${label('title')}</h1></div>
       <div id="login-provider">
-      <button class="btn google-sign-in" id="google-sign-in" type="button">
-        <svg class="google-logo" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-          <path fill="#4285F4" d="M43.61 24.46c0-1.36-.12-2.71-.35-4.04H24v7.65h11.02a9.42 9.42 0 0 1-4.08 6.18v5.13h6.61c3.86-3.55 6.06-8.77 6.06-14.92z"/>
-          <path fill="#34A853" d="M24 44c5.5 0 10.11-1.82 13.55-4.62l-6.61-5.13c-1.83 1.23-4.2 1.95-6.94 1.95-5.32 0-9.83-3.59-11.44-8.42H5.74v5.29A20 20 0 0 0 24 44z"/>
-          <path fill="#FBBC05" d="M12.56 27.78a12 12 0 0 1 0-7.56v-5.29H5.74a20 20 0 0 0 0 18.14z"/>
-          <path fill="#EA4335" d="M24 11.8c3 0 5.69 1.04 7.8 3.05l5.85-5.85A19.16 19.16 0 0 0 24 4 20 20 0 0 0 5.74 14.93l6.82 5.29C14.17 15.39 18.68 11.8 24 11.8z"/>
-        </svg>
-        <span>${label('google')}</span>
-      </button>
+      <div id="google-sign-in" class="google-provider"></div>
       <div class="login-divider">${label('orEmail')}</div>
       </div>
       <form id="email-auth" class="fields">
@@ -317,10 +349,15 @@
     const message = dialog.querySelector('#account-message');
     if (accessNotice) message.textContent = copy[accessNotice];
     const google = dialog.querySelector('#google-sign-in');
+    let googleIdentity;
+    function renderGoogleButton() {
+      if (!googleIdentity || !google.isConnected) return;
+      google.replaceChildren();
+      googleIdentity.renderButton(google,{theme:'outline',size:'large',locale:loginLanguage});
+    }
     const email = dialog.querySelector('#email-auth');
     const createToggle = dialog.querySelector('#create-account-toggle');
     if (!supported) {
-      google.disabled = true;
       createToggle.disabled = true;
       email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
       message.textContent = copy.origin;
@@ -333,22 +370,31 @@
       applyLoginLanguage();
       email.elements.email.focus();
     });
-    google.addEventListener('click',async () => {
-      if (handling || !supported) return;
-      handling = true;
-      google.disabled = true;
-      message.textContent = copy.pending;
-      try {
-        const {auth,authSdk} = await connect();
-        if (!dialog.open || !google.isConnected || auth.currentUser) return;
-        await authSdk.signInWithPopup(auth,new authSdk.GoogleAuthProvider());
-      } catch (error) {
-        message.textContent = error.code === 'auth/popup-closed-by-user'
-          ? '' : [copy.error,error.code].filter(Boolean).join(' · ');
-      } finally {
-        handling = false;
-        google.disabled = false;
-      }
+    if (supported) void loadGoogleIdentity().then(identity => {
+      if (!google.isConnected) return;
+      googleIdentity = identity;
+      identity.initialize({
+        client_id: googleClientId,
+        callback: async ({credential}) => {
+          if (handling || !google.isConnected || !credential) return;
+          handling = true;
+          message.textContent = copy.pending;
+          try {
+            const {auth,authSdk,checkGoogle} = await connect();
+            if (!google.isConnected || auth.currentUser) return;
+            await checkGoogle({credential});
+            if (!google.isConnected || auth.currentUser) return;
+            await authSdk.signInWithCredential(auth,authSdk.GoogleAuthProvider.credential(credential));
+          } catch (error) {
+            message.textContent = authError(copy,error);
+          } finally {
+            handling = false;
+          }
+        }
+      });
+      renderGoogleButton();
+    }).catch(error => {
+      if (google.isConnected && !handling) message.textContent = authError(copy,error);
     });
     email.addEventListener('submit',async event => {
       event.preventDefault();
@@ -358,7 +404,7 @@
       buttons.forEach(button => { button.disabled = true; });
       message.textContent = copy.pending;
       try {
-        const {auth,authSdk,store,database} = await connect();
+        const {auth,authSdk,checkVerification} = await connect();
         if (!dialog.open || !email.isConnected || auth.currentUser) return;
         const address = email.elements.email.value.trim().toLowerCase();
         if (creating) {
@@ -366,18 +412,13 @@
             message.textContent = copy.signupDenied;
             return;
           }
-          const approval = await store.getDocFromServer(store.doc(database,'accessInvites',address)).catch(() => null);
-          if (!approval) {
-            message.textContent = copy.signupCheckFailed;
-            return;
-          }
-          if (approval.data()?.allowed !== true) {
-            message.textContent = copy.signupDenied;
-            return;
-          }
-          if (!email.isConnected || auth.currentUser) return;
           const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
-          try { await authSdk.sendEmailVerification(result.user); } catch {}
+          try {
+            await checkVerification();
+            if (auth.currentUser === result.user) await authSdk.sendEmailVerification(result.user);
+          } catch {
+            // The verification screen lets the user retry the access check and send.
+          }
           return;
         }
         await authSdk.signInWithEmailAndPassword(auth,address,email.elements.password.value);
@@ -385,7 +426,7 @@
         const code = error.code;
         message.textContent = code === 'auth/email-already-in-use' ? copy.signupExisting
           : ['auth/invalid-credential','auth/user-not-found','auth/wrong-password'].includes(code) ? copy.useSignup
-          : [copy.error,code].filter(Boolean).join(' · ');
+          : authError(copy,error);
       } finally {
         handling = false;
         buttons.forEach(button => { button.disabled = false; });
@@ -397,6 +438,7 @@
       loginLanguage = loginLanguage === 'ar' ? 'en' : 'ar';
       try { localStorage.setItem(loginLanguageKey,loginLanguage); } catch {}
       applyLoginLanguage();
+      renderGoogleButton();
       message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice] : '';
     });
 
