@@ -2,9 +2,21 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // accessOwners/{uid}: assigned by the Firebase administrator only.
-    // accessInvites/{lowercaseEmail}: owner-managed {allowed: true}.
+    // Owner roles and owner email bootstrap are keyed by UID and normalized email.
+    // accessInvites/{email}: allowed plus pending/approved status, with uid on approval.
+    // Legacy grants omit status and may contain a closed signupCode.
+    // users/{uid}: normalized email for a verified, approved invite.
     // users/{uid}/ledger/current: bounded JSON payload and integer revision.
+    function validEmail(email) {
+      return email is string && email.size() <= 254
+        && email == email.lower() && email.matches('^[^@/[:space:]]+@[^@/[:space:]]+[.][^@/[:space:]]+$');
+    }
+
+    function validUid(uid) {
+      return uid is string && uid.size() > 0 && uid.size() <= 128
+        && uid.matches('^[^/]+$') && !(uid in ['.', '..']);
+    }
+
     function hasVerifiedEmail() {
       return request.auth != null
         && request.auth.token.email is string
@@ -12,28 +24,69 @@ service cloud.firestore {
         && request.auth.token.firebase.sign_in_provider in ['google.com', 'password'];
     }
 
+    function matchesEmail(email) {
+      return request.auth != null && request.auth.token.email is string
+        && request.auth.token.email.lower() == email;
+    }
+
+    function isSelf(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
     function isOwner() {
       return hasVerifiedEmail()
         && exists(/databases/$(database)/documents/accessOwners/$(request.auth.uid));
     }
 
-    function isInvited(email) {
-      return exists(/databases/$(database)/documents/accessInvites/$(email))
-        && get(/databases/$(database)/documents/accessInvites/$(email)).data.allowed == true;
+    function invitePath(email) {
+      return /databases/$(database)/documents/accessInvites/$(email);
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function oldLink(invite) {
+      return invite.get('signupCode', '');
+    }
+
+    function isValidInvite(invite) {
+      return invite.allowed == true
+        && invite.keys().hasOnly(['allowed', 'status', 'uid', 'signupCode'])
+        && (!('signupCode' in invite)
+          || (oldLink(invite) is string && oldLink(invite).matches('^[0-9a-f]{32}$')))
+        && ((invite.status == 'pending' && !('uid' in invite))
+          || (invite.status == 'approved' && validUid(invite.uid)));
+    }
+
+    function pendingInvite(invite) {
+      return invite.allowed == true && invite.get('status', 'pending') == 'pending'
+        && !('uid' in invite);
+    }
+
+    function approvedInvite(invite) {
+      return invite.allowed == true && invite.get('status', '') == 'approved'
+        && validUid(invite.get('uid', ''));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(['email']) && validEmail(data.email);
     }
 
     function canUseLedger(uid) {
-      return request.auth != null && request.auth.uid == uid
-        && (isOwner() || (hasVerifiedEmail()
-          && isInvited(request.auth.token.email.lower())));
+      return isSelf(uid) && (isOwner() || (hasVerifiedEmail()
+        && validEmail(request.auth.token.email.lower())
+        && hasApprovedUser(uid, request.auth.token.email.lower())));
     }
 
-    function isValidInvite(email, invite) {
-      return email.size() <= 254
-        && email == email.lower()
-        && email.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$')
-        && invite.keys().hasOnly(['allowed'])
-        && invite.allowed == true;
+    function inviteMatchesUid(email, uid) {
+      let path = invitePath(email);
+      return exists(path) && approvedInvite(get(path).data) && get(path).data.uid == uid;
+    }
+
+    function hasApprovedUser(uid, email) {
+      let profile = userPath(uid);
+      return inviteMatchesUid(email, uid) && exists(profile) && get(profile).data.email == email;
     }
 
     function isValidLedger(ledger) {
@@ -45,31 +98,33 @@ service cloud.firestore {
         && ledger.payload.size() <= 700000;
     }
 
-    // A missing document is readable only when the exact address is approved.
-    // No invitation or owner records are returned by this lookup.
-    match /signupChecks/{email} {
-      allow get: if resource == null
-        && email.size() <= 254 && email == email.lower()
-        && email.matches('^[^@/ ]+@[^@/ ]+[.][^@/ ]+$')
-        && (request.auth == null || hasMatchingEmail(email))
-        && (isInvited(email) || isRegisteredOwnerEmail(email)
-          || (hasMatchingEmail(email)
-            && exists(/databases/$(database)/documents/accessOwners/$(request.auth.uid))));
-    }
-
-    function hasMatchingEmail(email) {
-      return request.auth != null && request.auth.token.email is string
-        && request.auth.token.email.lower() == email;
-    }
-
     function isRegisteredOwnerEmail(email) {
       let path = /databases/$(database)/documents/accessOwnerEmails/$(email);
       return exists(path)
         && exists(/databases/$(database)/documents/accessOwners/$(get(path).data.uid));
     }
 
+    function eligibleLookup(email, signup) {
+      return resource == null && validEmail(email)
+        && (request.auth == null || matchesEmail(email))
+        && ((exists(invitePath(email)) && (pendingInvite(get(invitePath(email)).data)
+            || (!signup && approvedInvite(get(invitePath(email)).data))))
+          || (!signup && (isRegisteredOwnerEmail(email)
+            || (matchesEmail(email)
+              && exists(/databases/$(database)/documents/accessOwners/$(request.auth.uid))))));
+    }
+
+    // Exact-address preflight reads return only a missing document.
+    match /signinChecks/{email} {
+      allow get: if eligibleLookup(email, false);
+    }
+
+    match /signupChecks/{email} {
+      allow get: if eligibleLookup(email, true);
+    }
+
     function isValidOwnerEmail(email, entry) {
-      return isOwner() && hasMatchingEmail(email)
+      return isOwner() && validEmail(email) && matchesEmail(email)
         && entry.keys().hasOnly(['uid']) && entry.uid == request.auth.uid;
     }
 
@@ -78,26 +133,73 @@ service cloud.firestore {
     }
 
     match /accessOwners/{uid} {
-      allow get: if hasVerifiedEmail() && request.auth.uid == uid;
+      allow get: if hasVerifiedEmail() && isSelf(uid);
+    }
+
+    function approvesOwnInvite(email, before, after) {
+      return hasVerifiedEmail() && matchesEmail(email) && pendingInvite(before)
+        && after.status == 'approved' && after.uid == request.auth.uid
+        && oldLink(before) == oldLink(after)
+        && !exists(userPath(after.uid))
+        && getAfter(userPath(after.uid)).data.email == email;
+    }
+
+    function canRemoveInvite(email, invite) {
+      return (isOwner()
+          || (approvedInvite(invite)
+            && (isSelf(invite.uid) || (hasVerifiedEmail() && matchesEmail(email)))))
+        && (!approvedInvite(invite) || !existsAfter(userPath(invite.uid))
+          || getAfter(userPath(invite.uid)).data.email != email)
+        && (oldLink(invite) == '' || !existsAfter(
+          /databases/$(database)/documents/signupInvites/$(oldLink(invite))));
     }
 
     match /accessInvites/{email} {
       allow list: if isOwner();
-      allow delete: if isOwner();
-      allow get: if isOwner()
-        || (hasVerifiedEmail() && request.auth.token.email.lower() == email);
-      allow create, update: if isOwner() && isValidInvite(email, request.resource.data)
-        && !exists(/databases/$(database)/documents/accessRevocations/$(email));
+      allow get: if isOwner() || (hasVerifiedEmail() && matchesEmail(email))
+        || (resource != null && isSelf(resource.data.get('uid', '')));
+      allow create: if isOwner() && validEmail(email) && isValidInvite(request.resource.data)
+        && request.resource.data.status == 'pending' && oldLink(request.resource.data) == ''
+        && !existsAfter(/databases/$(database)/documents/accessRevocations/$(email));
+      allow update: if validEmail(email) && isValidInvite(request.resource.data)
+        && approvesOwnInvite(email, resource.data, request.resource.data);
+      allow delete: if canRemoveInvite(email, resource.data);
     }
 
-    // Only the Worker service account can write deletion progress via IAM.
     match /accessRevocations/{email} {
-      allow get, list: if isOwner();
+      allow get, list, delete: if isOwner();
     }
 
-    // Old signup links are closed. Owners may remove the old record when modifying a grant.
     match /signupInvites/{code} {
-      allow delete: if isOwner();
+      function canReadLinkedInvite(email) {
+        let grant = get(invitePath(email)).data;
+        return validEmail(email) && approvedInvite(grant) && oldLink(grant) == code
+          && (isSelf(grant.uid) || (hasVerifiedEmail() && matchesEmail(email)));
+      }
+
+      allow get: if isOwner() || (request.auth != null && resource == null)
+        || (resource != null && canReadLinkedInvite(resource.data.email));
+      allow delete: if isOwner() || (resource != null
+        && canReadLinkedInvite(resource.data.email)
+        && !existsAfter(invitePath(resource.data.email)));
+    }
+
+    match /users/{uid} {
+      allow get: if isOwner() || isSelf(uid)
+        || (hasVerifiedEmail() && validEmail(request.auth.token.email.lower())
+          && inviteMatchesUid(request.auth.token.email.lower(), uid)
+          && (resource == null || matchesEmail(resource.data.email)));
+      allow list: if isOwner();
+      allow create: if isSelf(uid) && hasVerifiedEmail()
+        && isValidUser(request.resource.data) && matchesEmail(request.resource.data.email)
+        && pendingInvite(get(invitePath(request.resource.data.email)).data)
+        && approvedInvite(getAfter(invitePath(request.resource.data.email)).data)
+        && getAfter(invitePath(request.resource.data.email)).data.uid == uid;
+      allow delete: if (isOwner() || isSelf(uid)
+          || (hasVerifiedEmail() && matchesEmail(resource.data.email)
+            && hasApprovedUser(uid, resource.data.email)))
+        && (!existsAfter(invitePath(resource.data.email))
+          || getAfter(invitePath(resource.data.email)).data.get('uid', '') != uid);
     }
 
     match /users/{uid}/ledger/current {
@@ -111,4 +213,3 @@ service cloud.firestore {
     }
   }
 }
-

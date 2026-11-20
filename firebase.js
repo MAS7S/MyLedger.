@@ -11,23 +11,18 @@
   };
 
   const googleClientId = '572111662694-ak1lh2f7tf8ief2d011vj4kb03k1apb5.apps.googleusercontent.com';
-  const revocationOrigin = "__MYLEDGER_REVOCATION_URL__";
-  const revocationEnabled = revocationOrigin.startsWith("https://");
 
   const messages = {
     ar: {
       createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'هذا البريد غير مصرح له من قبل المالك.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
       signupCheckFailed:'تعذّر التحقق من صلاحية البريد الآن. أعد المحاولة.',
-      deletionUnavailable:'خدمة حذف الحساب غير مهيّأة. لم يُزل التصريح.',
-      accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على صلاحية الوصول.',
+      accessRevoked:'تم إلغاء الوصول. تواصل مع المالك للحصول على دعوة جديدة.',
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
-      revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. تأكّد من نشر قواعد Firestore المحدّثة ثم أعد المحاولة.',
-      deleteConfirm:'إلغاء الوصول وحذف حساب تسجيل الدخول نهائيًا للبريد',
-      deletePending:'إكمال حذف الحساب', deleting:'جارٍ إلغاء الوصول…',
-      deleted:'تم إلغاء الوصول وحذف حساب تسجيل الدخول لـ',
-      deleteError:'تعذّر تأكيد حذف حساب تسجيل الدخول. أعد المحاولة لإكمال العملية.',
-      protectedAccount:'لا يمكن حذف حساب مالك من هذه القائمة.',
-      authorized:'المصرّح لهم', authorizedEmails:'الإيميلات',
+      revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. أعد المحاولة.',
+      authorized:'المصرّح لهم', invitations:'الدعوات', users:'المستخدمون',
+      waiting:'قيد الانتظار', approved:'موافق عليه',
+      resetPassword:'إعادة تعيين كلمة المرور', resetEmail:'أدخل بريدك الإلكتروني أولاً.',
+      resetSent:'إذا كان لديك حساب مؤهّل، ستصلك رسالة إعادة تعيين كلمة المرور.',
       listLoading:'جارٍ تحميل القائمة…', listEmpty:'ما فيه بيانات في هذه القائمة.',
       listError:'تعذّر تحميل القائمة. تأكّد من نشر قواعد Firestore الجديدة ثم أعد المحاولة.', retry:'إعادة المحاولة',
       title:'تسجيل الدخول', google:'الدخول بحساب Google', email:'البريد الإلكتروني', password:'كلمة المرور',
@@ -44,17 +39,14 @@
     en: {
       createAccount:'Create account', firstTime:'First time?', setPassword:'Set password', backToSignIn:'Back to sign in', orEmail:'or use email', signupDenied:'This email has not been granted access by the owner.', useSignup:'Check your password, select Create account if this is your first time, or sign in with Google if you used it before.', signupExisting:'This account already exists. Sign in with your password or with Google.',
       signupCheckFailed:'Could not check email authorization. Try again.',
-      deletionUnavailable:'Account deletion is unavailable. Access was not removed.',
-      accessRevoked:'Access revoked. Contact the owner for access.',
+      accessRevoked:'Access revoked. Contact the owner for a new invitation.',
       revoke:'Remove access', revokeConfirm:'Remove access for',
-      revoked:'Access removed for', revokeError:'Could not remove access. Publish the updated Firestore rules and try again.',
-      deleteConfirm:'Revoke access and permanently delete the sign-in account for',
-      deletePending:'Finish deleting account', deleting:'Revoking access…',
-      deleted:'Access revoked and sign-in account deleted for',
-      deleteError:'Could not confirm account deletion. Try again to finish.',
-      protectedAccount:'An owner account cannot be deleted from this list.',
-      authorized:'Authorized people', authorizedEmails:'Email addresses',
-      listLoading:'Loading approved entries…', listEmpty:'No approved entries in this list.',
+      revoked:'Access removed for', revokeError:'Could not remove access. Try again.',
+      authorized:'Authorized people', invitations:'Invitations', users:'Users',
+      waiting:'Pending', approved:'Approved',
+      resetPassword:'Reset password', resetEmail:'Enter your email address first.',
+      resetSent:'If you have an eligible account, you’ll receive a password reset email.',
+      listLoading:'Loading access…', listEmpty:'No entries in this list.',
       listError:'Could not load the list. Make sure the latest Firestore rules are published and try again.', retry:'Retry',
       title:'Sign in',google:'Sign in with Google',email:'Email',password:'Password',signIn:'Sign in by email',
       share:'Grant access to MyLedger', method:'Access method',recipient:'Invitee email',
@@ -74,11 +66,14 @@
   let connection;
   let googleLibrary;
   let ownerAccess;
-  let accessCheck = 0;
-  let stopAccessWatch;
   let accessNotice;
   let handling = false;
-  let currentUser;
+  let googleExchange;
+  let session;
+  const invalidAuth = new Set([
+    'auth/user-not-found', 'auth/user-disabled', 'auth/user-token-expired',
+    'auth/invalid-user-token', 'auth/token-expired'
+  ]);
 
   function connect() {
     if (connection) return connection;
@@ -96,7 +91,18 @@
         store.connectFirestoreEmulator(database,location.hostname,8080);
       }
       const services = {auth,authSdk,store,database};
-      authSdk.onAuthStateChanged(auth,user => void checkAccess(services,user));
+      const authChanged = user => {
+        if (session?.user === user) return;
+        if (session) leaveSession(session);
+        if (user) {
+          accessNotice = undefined;
+          session = {services,user,stops:[],exchange:googleExchange};
+          void checkAccess(session);
+        } else if (accessNotice || !dialog.open || !dialog.querySelector('#email-auth')) {
+          showSignInForm();
+        }
+      };
+      authSdk.onAuthStateChanged(auth,authChanged);
       return services;
     }).catch(error => {
       connection = undefined;
@@ -133,11 +139,20 @@
     return Object.assign(new Error('Access denied'),{code:'myledger/access-denied'});
   }
 
-  async function checkEmailAccess({store,database},rawEmail) {
-    const email = typeof rawEmail === 'string' ? rawEmail.trim().toLowerCase() : '';
-    if (email.length > 254 || !/^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/.test(email)) throw accessDenied();
+  function normalizeEmail(value) {
+    return typeof value === 'string' ? value.trim().toLowerCase() : '';
+  }
+
+  function validEmail(email) {
+    return email.length <= 254 && /^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/.test(email);
+  }
+
+  async function checkEmailAccess({store,database},rawEmail,signup=false) {
+    const email = normalizeEmail(rawEmail);
+    if (!validEmail(email)) throw accessDenied();
     try {
-      const check = await store.getDocFromServer(store.doc(database,'signupChecks',email));
+      const collection = signup ? 'signupChecks' : 'signinChecks';
+      const check = await store.getDocFromServer(store.doc(database,collection,email));
       if (check.exists()) throw accessDenied();
     } catch (error) {
       if (error.code === 'permission-denied') throw accessDenied();
@@ -169,105 +184,252 @@
     window.dispatchEvent(new CustomEvent('myledger-account',{detail}));
   }
 
-  async function checkAccess(services,user) {
-    const {auth,store,database} = services;
-    const attempt = ++accessCheck;
-    stopAccessWatch?.();
-    stopAccessWatch = undefined;
-    currentUser = user;
-    ownerAccess = undefined;
-    accountChanged(null);
-    const copy = messages[document.documentElement.lang] || messages.ar;
-    if (!user) {
-      if (accessNotice || !dialog.open || !dialog.querySelector('#email-auth')) showSignInForm();
-      return;
-    }
-    accessNotice = undefined;
-    showAccessStatus(copy,copy.pending,services);
-    try {
-      const token = await user.getIdTokenResult();
-      if (attempt !== accessCheck) return;
-      const provider = token.signInProvider;
-      if (!['google.com','password'].includes(provider)) {
-        showAccessStatus(copy,copy.denied,services);
-        return;
-      }
-      const verifiedEmail = token.claims.email_verified === true;
-      if (!verifiedEmail) {
-        showAccessStatus(copy,copy.confirmEmail,services,Boolean(user.email));
-        return;
-      }
-      const ownerRef = store.doc(database,'accessOwners',user.uid);
-      const owner = verifiedEmail && (await store.getDocFromServer(ownerRef)).exists();
-      if (attempt !== accessCheck) return;
-      const email = verifiedEmail && token.claims.email?.trim().toLowerCase();
-      const recipient = email && !email.includes('/') ? email : null;
-      if (!owner && !recipient) {
-        showAccessStatus(copy,copy.denied,services);
-        return;
-      }
-      const permission = owner ? ownerRef : store.doc(database,'accessInvites',recipient);
-      if (owner && recipient) {
-        // Existing owners can enable future Google preflight using their verified email.
-        const ownerEmail = store.doc(database,'accessOwnerEmails',recipient);
-        void store.setDoc(ownerEmail,{uid:user.uid}).catch(() => {});
-      }
-      let active = false;
-      let authorized = false;
+  function activeSession(state) {
+    return session === state && state.services.auth.currentUser === state.user;
+  }
 
-      const revoke = async () => {
-        if (attempt !== accessCheck) return;
-        ++accessCheck;
-        stopAccessWatch?.();
-        stopAccessWatch = undefined;
-        ownerAccess = undefined;
-        accessNotice = authorized ? 'accessRevoked' : 'signupDenied';
-        accountChanged(null);
-        showSignInForm();
-        try { await services.authSdk.signOut(auth); }
-        catch (error) {
-          if (auth.currentUser?.uid === user.uid) {
-            showAccessStatus(copy,copy[accessNotice],services);
-          }
-        }
-      };
-      stopAccessWatch = store.onSnapshot(permission,{includeMetadataChanges:true},snapshot => {
-        if (attempt !== accessCheck || snapshot.metadata.hasPendingWrites) return;
-        if (snapshot.metadata.fromCache) {
-          if (active) {
-            active = false;
-            ownerAccess = undefined;
-            accountChanged(null);
-            showAccessStatus(copy,copy.pending,services,false,true);
-          }
-          return;
-        }
-        if (owner ? !snapshot.exists() : snapshot.data()?.allowed !== true) {
-          void revoke();
-          return;
-        }
-        if (active) return;
-        active = authorized = true;
-        if (owner) ownerAccess = {store,database,user};
-        if (dialog.open) dialog.close();
-        accountChanged(ledgerAdapter(store,database,auth,user.uid,owner));
-      },error => {
-        if (attempt !== accessCheck) return;
-        if (error.code === 'permission-denied') {
-          void revoke();
-          return;
-        }
-        ownerAccess = undefined;
-        accountChanged(null);
-        showAccessStatus(copy,[copy.error,error.code].filter(Boolean).join(' · '),services,false,true);
-      });
-    } catch (error) {
-      if (attempt !== accessCheck) return;
-      showAccessStatus(copy,[copy.error,error.code].filter(Boolean).join(' · '),services,false,true);
+  function hideAccount(state) {
+    if (!state.adapter) return;
+    state.adapter = undefined;
+    ownerAccess = undefined;
+    if (dialog.open) dialog.close();
+    accountChanged(null);
+  }
+
+  function stopAccessWatches(state) {
+    state.stops.splice(0).forEach(stop => stop());
+  }
+
+  function leaveSession(state) {
+    session = undefined;
+    stopAccessWatches(state);
+    hideAccount(state);
+  }
+
+  async function denySession(state,notice) {
+    if (!activeSession(state)) return;
+    accessNotice = notice;
+    hideAccount(state);
+    stopAccessWatches(state);
+    const {auth,authSdk} = state.services;
+    try {
+      if (state.newGoogleAccount) {
+        state.newGoogleAccount = false;
+        try { await authSdk.deleteUser(state.user); } catch {}
+      }
+      if (activeSession(state)) await authSdk.signOut(auth);
+    } catch {
+      if (activeSession(state)) {
+        const copy = messages[loginLanguage];
+        showAccessStatus(copy,copy[notice],state);
+      }
     }
   }
 
-  function showAccessStatus(copy,text,services,unverified=false,retry=false) {
+  async function removeGrant(store,database,tx,reference,grant,userSnapshot) {
+    const legacyLink = /^[0-9a-f]{32}$/.test(grant.signupCode || '')
+      ? await tx.get(store.doc(database,'signupInvites',grant.signupCode)) : null;
+    if (userSnapshot?.data()?.email === reference.id) tx.delete(userSnapshot.ref);
+    if (legacyLink?.exists()) tx.delete(legacyLink.ref);
+    tx.delete(reference);
+  }
+
+  async function revokeGrant({store,database},email,shouldRemove) {
+    const reference = store.doc(database,'accessInvites',email);
+    return store.runTransaction(database,async tx => {
+      const grant = (await tx.get(reference)).data();
+      if (!grant) return false;
+      const user = grant.uid ? await tx.get(store.doc(database,'users',grant.uid)) : null;
+      if (!shouldRemove(grant,user?.data(),reference.id)) return false;
+      await removeGrant(store,database,tx,reference,grant,user);
+      return true;
+    });
+  }
+
+  async function completeInvitation(state,email,profile) {
+    const {store,database} = state.services;
+    const reference = store.doc(database,'accessInvites',email);
+    return store.runTransaction(database,async tx => {
+      if (!activeSession(state)) throw accessDenied();
+      const grant = (await tx.get(reference)).data();
+      const user = await tx.get(profile);
+      if (!grant) {
+        if (user.data()?.email === email) tx.delete(profile);
+        return false;
+      }
+      if (grant.allowed !== true) return false;
+      if (grant.status === 'approved') {
+        if (grant.uid === state.user.uid && user.data()?.email === email) return true;
+        const previousUser = grant.uid === state.user.uid ? user
+          : await tx.get(store.doc(database,'users',grant.uid));
+        await removeGrant(store,database,tx,reference,grant,previousUser);
+        return false;
+      }
+      if ((grant.status || 'pending') !== 'pending' || grant.uid || user.exists()) return false;
+      tx.update(reference,{status:'approved',uid:state.user.uid});
+      tx.set(profile,{email});
+      return true;
+    });
+  }
+
+  function watchAccess(state,references,owner) {
+    const {auth,store,database} = state.services;
+    const confirmed = new Set();
+    const copy = messages[loginLanguage];
+    references.forEach(([reference,valid]) => {
+      state.stops.push(store.onSnapshot(reference,{includeMetadataChanges:true},snapshot => {
+        if (!activeSession(state) || snapshot.metadata.hasPendingWrites) return;
+        if (snapshot.metadata.fromCache) {
+          confirmed.delete(reference);
+          hideAccount(state);
+          showAccessStatus(copy,copy.pending,state,false,true);
+          return;
+        }
+        if (!valid(snapshot)) {
+          hideAccount(state);
+          if (!owner && reference.path.startsWith('users/')) {
+            void checkAccess(state);
+          } else {
+            void denySession(state,'accessRevoked');
+          }
+          return;
+        }
+        confirmed.add(reference);
+        if (confirmed.size !== references.length || state.adapter) return;
+        if (owner) ownerAccess = {...state.services};
+        if (dialog.open) dialog.close();
+        state.adapter = ledgerAdapter(store,database,auth,state.user.uid,owner);
+        accountChanged(state.adapter);
+      },error => {
+        if (!activeSession(state)) return;
+        hideAccount(state);
+        if (error.code === 'permission-denied') {
+          void denySession(state,'accessRevoked');
+        } else {
+          showAccessStatus(copy,authError(copy,error),state,false,true);
+        }
+      }));
+    });
+  }
+
+  async function checkAccess(state) {
+    if (!activeSession(state)) return;
+    if (state.checking) {
+      state.checkAgain = true;
+      return;
+    }
+    const {authSdk,store,database} = state.services;
+    const {user} = state;
+    const copy = messages[loginLanguage];
+    state.checking = true;
+    if (!state.adapter) showAccessStatus(copy,copy.pending,state);
+    try {
+      if (state.exchange) {
+        const result = await state.exchange.catch(() => null);
+        state.exchange = undefined;
+        state.newGoogleAccount = result?.user === user && authSdk.getAdditionalUserInfo(result)?.isNewUser;
+        if (!activeSession(state)) return;
+      }
+      if (state.email && !state.owner && await authAccountRemoved(state)) {
+        hideAccount(state);
+        try { await revokeGrant(state.services,state.email,grant => grant.uid === user.uid); }
+        finally { await denySession(state,'accessRevoked'); }
+        return;
+      }
+      await authSdk.reload(user);
+      const token = await user.getIdTokenResult(true);
+      if (!activeSession(state)) return;
+      const email = normalizeEmail(token.claims.email);
+      const verified = token.claims.email_verified === true && validEmail(email)
+        && ['google.com','password'].includes(token.signInProvider);
+      const profile = store.doc(database,'users',user.uid);
+      const registered = (await store.getDocFromServer(profile)).data();
+      if (!activeSession(state)) return;
+      if (registered && (!verified || registered.email !== email)) {
+        hideAccount(state);
+        const removed = await revokeGrant(state.services,registered.email,grant => grant.uid === user.uid);
+        if (!removed) await store.deleteDoc(profile);
+        await denySession(state,'accessRevoked');
+        return;
+      }
+      if (!verified) {
+        if (validEmail(email)) await checkEmailAccess(state.services,email,true);
+        if (activeSession(state)) {
+          showAccessStatus(copy,state.verificationSent ? copy.verificationSent : copy.confirmEmail,state,true);
+        }
+        return;
+      }
+      const ownerRef = store.doc(database,'accessOwners',user.uid);
+      const owner = (await store.getDocFromServer(ownerRef)).exists();
+      if (!activeSession(state)) return;
+      if (!owner && !await completeInvitation(state,email,profile)) {
+        await denySession(state,registered || state.email ? 'accessRevoked' : 'signupDenied');
+        return;
+      }
+      if (!activeSession(state)) return;
+      state.newGoogleAccount = false;
+      if (state.adapter && state.owner === owner && state.email === email) return;
+      hideAccount(state);
+      stopAccessWatches(state);
+      state.owner = owner;
+      state.email = email;
+      if (owner) {
+        void store.setDoc(store.doc(database,'accessOwnerEmails',email),{uid:user.uid}).catch(() => {});
+      }
+      const grant = store.doc(database,'accessInvites',email);
+      watchAccess(state,owner ? [[ownerRef,snapshot => snapshot.exists()]] : [
+        [grant,snapshot => {
+          const invite = snapshot.data();
+          return invite?.allowed === true && invite.status === 'approved' && invite.uid === user.uid;
+        }],
+        [profile,snapshot => snapshot.data()?.email === email]
+      ],owner);
+    } catch (error) {
+      if (!activeSession(state)) return;
+      hideAccount(state);
+      stopAccessWatches(state);
+      if (invalidAuth.has(error.code) || ['myledger/access-denied','permission-denied'].includes(error.code)) {
+        if (state.email && !state.owner && ['auth/user-not-found','auth/user-disabled'].includes(error.code)) {
+          await revokeGrant(state.services,state.email,grant => grant.uid === user.uid).catch(() => {});
+        }
+        await denySession(state,error.code === 'myledger/access-denied' && !state.email ? 'signupDenied' : 'accessRevoked');
+      } else {
+        showAccessStatus(copy,authError(copy,error),state,false,true);
+      }
+    } finally {
+      state.checking = false;
+      if (state.checkAgain && activeSession(state)) {
+        state.checkAgain = false;
+        void checkAccess(state);
+      }
+    }
+  }
+
+  // Check the current Firebase Auth account before the SDK drops a disabled session.
+  // Cleanup still uses the current user's authorization in Firestore.
+  async function authAccountRemoved(state) {
+    const idToken = await state.user.getIdToken();
+    const base = emulator ? 'http://' + location.hostname + ':9099/identitytoolkit.googleapis.com'
+      : 'https://identitytoolkit.googleapis.com';
+    const response = await fetch(base + '/v1/accounts:lookup?key=' + encodeURIComponent(config.apiKey), {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({idToken})
+    });
+    const result = await response.json();
+    if (!response.ok) return ['USER_NOT_FOUND','USER_DISABLED','EMAIL_NOT_FOUND'].includes(result.error?.message);
+    const account = result.users?.find(record => record.localId === state.user.uid);
+    return !account || account.disabled === true;
+  }
+
+  function recheckSession() {
+    if (session && document.visibilityState === 'visible') void checkAccess(session);
+  }
+  document.addEventListener('visibilitychange',recheckSession);
+  window.addEventListener('online',recheckSession);
+  window.setInterval(recheckSession,60000);
+
+  function showAccessStatus(copy,text,state,unverified=false,retry=false) {
     if (dialog.open) dialog.close();
     dialog.classList.add('login-screen');
     dialog.innerHTML = `<div class="login-heading"><p class="login-brand">MyLedger</p><h1 id="account-title">${copy.title}</h1></div>
@@ -280,8 +442,8 @@
     dialog.setAttribute('aria-labelledby','account-title');
     const status = dialog.querySelector('#account-message');
     status.textContent = text;
-    const {auth,authSdk} = services;
-    const user = auth.currentUser;
+    const {auth,authSdk} = state.services;
+    const {user} = state;
     const onClick = (selector,work) => dialog.querySelector(selector)?.addEventListener('click',async event => {
       const button = event.currentTarget;
       button.disabled = true;
@@ -291,16 +453,13 @@
     });
     onClick('#other-account',() => authSdk.signOut(auth));
     onClick('#send-verification',async () => {
-      await checkEmailAccess(services,user.email);
-      if (auth.currentUser !== user || !status.isConnected) return;
+      await checkEmailAccess(state.services,user.email,true);
+      if (!activeSession(state) || !status.isConnected) return;
       await authSdk.sendEmailVerification(user);
+      state.verificationSent = true;
       status.textContent = copy.verificationSent;
     });
-    onClick('#retry-access',async () => {
-      await authSdk.reload(user);
-      await authSdk.getIdToken(user,true);
-      if (auth.currentUser?.uid === user.uid) await checkAccess(services,user);
-    });
+    onClick('#retry-access',() => checkAccess(state));
     dialog.show();
   }
 
@@ -338,10 +497,36 @@
     if (localStorage.getItem(loginLanguageKey) === 'ar') loginLanguage = 'ar';
   } catch {}
 
-  function showSignInForm() {
+  function showSignInForm(creating=false,initialEmail='') {
     let copy = messages[loginLanguage];
-    let creating = false;
     const label = key => `<span data-login-label="${key}">${copy[key]}</span>`;
+    const title = creating ? 'createAccount' : 'title';
+    const submit = creating ? 'setPassword' : 'signIn';
+    dialog.classList.add('login-screen');
+    dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="account-title">${label(title)}</h1></div>
+      ${creating ? '' : `<div id="login-provider">
+        <div id="google-sign-in" class="google-provider"></div>
+        <div class="login-divider">${label('orEmail')}</div>
+      </div>`}
+      <form id="email-auth" class="fields">
+        <label class="field full">${label('email')}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
+        <label class="field full">${label('password')}<input name="password" type="password" autocomplete="${creating ? 'new-password' : 'current-password'}" required></label>
+        <button class="btn primary" type="submit" id="login-submit">${label(submit)}</button>
+        ${creating ? '' : `<button type="button" class="btn" id="reset-password">${label('resetPassword')}</button>`}
+      </form>
+      <div class="login-switch">${creating ? '' : label('firstTime')}
+        <button type="button" id="create-account-toggle">${label(creating ? 'backToSignIn' : 'createAccount')}</button>
+      </div>
+      <p role="status" id="account-message"></p>`;
+    dialog.setAttribute('aria-labelledby','account-title');
+    const message = dialog.querySelector('#account-message');
+    const google = dialog.querySelector('#google-sign-in');
+    const form = dialog.querySelector('#email-auth');
+    const address = form.elements.email;
+    const createToggle = dialog.querySelector('#create-account-toggle');
+    address.value = initialEmail;
+    let googleIdentity;
+
     function applyLoginLanguage() {
       copy = messages[loginLanguage];
       document.documentElement.lang = loginLanguage;
@@ -352,119 +537,117 @@
       const toggle = dialog.querySelector('#login-language');
       toggle.textContent = loginLanguage === 'ar' ? 'English' : 'العربية';
       toggle.lang = loginLanguage === 'ar' ? 'en' : 'ar';
-      dialog.querySelector('#account-title').textContent = creating ? copy.createAccount : copy.title;
-      dialog.querySelector('#login-submit').textContent = creating ? copy.setPassword : copy.title;
-      dialog.querySelector('#login-provider').hidden = creating;
-      dialog.querySelector('#first-time-label').hidden = creating;
-      dialog.querySelector('#create-account-toggle').textContent = creating ? copy.backToSignIn : copy.createAccount;
-      email.elements.password.autocomplete = creating ? 'new-password' : 'current-password';
+      message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice] : '';
     }
-    dialog.classList.add('login-screen');
-    dialog.innerHTML = `<div class="login-heading"><div class="login-brand-row"><p class="login-brand">MyLedger</p><button type="button" class="btn" id="login-language"></button></div><h1 id="account-title">${label('title')}</h1></div>
-      <div id="login-provider">
-      <div id="google-sign-in" class="google-provider"></div>
-      <div class="login-divider">${label('orEmail')}</div>
-      </div>
-      <form id="email-auth" class="fields">
-        <label class="field full">${label('email')}<input name="email" type="email" dir="ltr" autocomplete="email" required></label>
-        <label class="field full">${label('password')}<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="btn primary" type="submit" id="login-submit">${label('signIn')}</button>
-      </form>
-      <div class="login-switch"><span id="first-time-label">${label('firstTime')}</span>
-        <button type="button" id="create-account-toggle">${label('createAccount')}</button>
-      </div>
-      <p role="status" id="account-message"></p>`;
-    dialog.setAttribute('aria-labelledby','account-title');
-    const message = dialog.querySelector('#account-message');
-    if (accessNotice) message.textContent = copy[accessNotice];
-    const google = dialog.querySelector('#google-sign-in');
-    let googleIdentity;
+
     function renderGoogleButton() {
-      if (!googleIdentity || !google.isConnected) return;
+      if (!googleIdentity || !google?.isConnected) return;
       google.replaceChildren();
       googleIdentity.renderButton(google,{theme:'outline',size:'large',locale:loginLanguage});
     }
-    const email = dialog.querySelector('#email-auth');
-    const createToggle = dialog.querySelector('#create-account-toggle');
+
     if (!supported) {
       createToggle.disabled = true;
-      email.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
-      message.textContent = copy.origin;
+      form.querySelectorAll('input,button').forEach(control => { control.disabled = true; });
     }
+
     createToggle.addEventListener('click',() => {
       if (handling) return;
-      creating = !creating;
-      email.elements.password.value = '';
-      message.textContent = '';
-      applyLoginLanguage();
-      email.elements.email.focus();
+      showSignInForm(!creating,address.value);
+      dialog.querySelector('[name="email"]').focus();
     });
-    if (supported) void loadGoogleIdentity().then(identity => {
+
+    async function withAuth(work,showError=error => authError(copy,error)) {
+      if (handling) return;
+      handling = true;
+      const buttons = form.querySelectorAll('button');
+      buttons.forEach(button => { button.disabled = true; });
+      message.textContent = copy.pending;
+      try {
+        const services = await connect();
+        if (!form.isConnected || services.auth.currentUser) return;
+        await work(services);
+      } catch (error) {
+        message.textContent = showError(error);
+      } finally {
+        handling = false;
+        buttons.forEach(button => { button.disabled = false; });
+      }
+    }
+
+    if (supported && google) void loadGoogleIdentity().then(identity => {
       if (!google.isConnected) return;
       googleIdentity = identity;
       identity.initialize({
         client_id: googleClientId,
-        callback: async ({credential}) => {
-          if (handling || !google.isConnected || !credential) return;
-          handling = true;
-          message.textContent = copy.pending;
-          try {
-            const services = await connect();
+        callback: ({credential}) => {
+          if (!google.isConnected || !credential) return;
+          void withAuth(async services => {
             const {auth,authSdk} = services;
-            if (!google.isConnected || auth.currentUser) return;
             await checkEmailAccess(services,googleEmail(credential));
             if (!google.isConnected || auth.currentUser) return;
-            await authSdk.signInWithCredential(auth,authSdk.GoogleAuthProvider.credential(credential));
-          } catch (error) {
-            message.textContent = authError(copy,error);
-          } finally {
-            handling = false;
-          }
+            googleExchange = authSdk.signInWithCredential(auth,authSdk.GoogleAuthProvider.credential(credential));
+            try { await googleExchange; }
+            finally { googleExchange = undefined; }
+          });
         }
       });
       renderGoogleButton();
     }).catch(error => {
       if (google.isConnected && !handling) message.textContent = authError(copy,error);
     });
-    email.addEventListener('submit',async event => {
+
+    form.addEventListener('submit',event => {
       event.preventDefault();
-      if (handling) return;
-      handling = true;
-      const buttons = email.querySelectorAll('button');
-      buttons.forEach(button => { button.disabled = true; });
-      message.textContent = copy.pending;
-      try {
-        const services = await connect();
+      const email = normalizeEmail(address.value);
+      const password = form.elements.password.value;
+      void withAuth(async services => {
         const {auth,authSdk} = services;
-        if (!dialog.open || !email.isConnected || auth.currentUser) return;
-        const address = email.elements.email.value.trim().toLowerCase();
-        if (creating) {
-          if (!/^[^@/\s]+@[^@/\s]+\.[^@/\s]+$/.test(address) || address.length > 254) {
-            message.textContent = copy.signupDenied;
-            return;
-          }
-          await checkEmailAccess(services,address);
-          if (!email.isConnected || auth.currentUser) return;
-          const result = await authSdk.createUserWithEmailAndPassword(auth,address,email.elements.password.value);
-          try {
-            await checkEmailAccess(services,result.user.email);
-            if (auth.currentUser === result.user) await authSdk.sendEmailVerification(result.user);
-          } catch {
-            // The verification screen lets the user retry the access check and send.
-          }
+        await checkEmailAccess(services,email,creating);
+        if (!form.isConnected || auth.currentUser) return;
+        if (!creating) {
+          await authSdk.signInWithEmailAndPassword(auth,email,password);
           return;
         }
-        await authSdk.signInWithEmailAndPassword(auth,address,email.elements.password.value);
-      } catch (error) {
+        const {user} = await authSdk.createUserWithEmailAndPassword(auth,email,password);
+        try {
+          await checkEmailAccess(services,user.email,true);
+          if (auth.currentUser !== user) return;
+          await authSdk.sendEmailVerification(user);
+          if (session?.user === user && auth.currentUser === user) {
+            session.verificationSent = true;
+            const status = dialog.querySelector('#account-message');
+            if (dialog.querySelector('#send-verification')) status.textContent = copy.verificationSent;
+          }
+        } catch {
+          // The verification screen lets the user retry sending the message.
+        }
+      },error => {
         const code = error.code;
-        message.textContent = code === 'auth/email-already-in-use' ? copy.signupExisting
-          : ['auth/invalid-credential','auth/user-not-found','auth/wrong-password'].includes(code) ? copy.useSignup
-          : authError(copy,error);
-      } finally {
-        handling = false;
-        buttons.forEach(button => { button.disabled = false; });
-      }
+        if (code === 'auth/email-already-in-use') return copy.signupExisting;
+        if (['auth/invalid-credential','auth/user-not-found','auth/wrong-password'].includes(code)) return copy.useSignup;
+        return authError(copy,error);
+      });
     });
+
+    dialog.querySelector('#reset-password')?.addEventListener('click',() => {
+      const email = normalizeEmail(address.value);
+      if (!validEmail(email)) {
+        message.textContent = copy.resetEmail;
+        address.focus();
+        return;
+      }
+      void withAuth(async services => {
+        try {
+          await checkEmailAccess(services,email);
+          await services.authSdk.sendPasswordResetEmail(services.auth,email);
+        } catch (error) {
+          if (!['myledger/access-denied','auth/user-not-found'].includes(error.code)) throw error;
+        }
+        message.textContent = copy.resetSent;
+      });
+    });
+
     applyLoginLanguage();
     dialog.querySelector('#login-language').addEventListener('click',() => {
       if (handling) return;
@@ -472,10 +655,9 @@
       try { localStorage.setItem(loginLanguageKey,loginLanguage); } catch {}
       applyLoginLanguage();
       renderGoogleButton();
-      message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice] : '';
     });
 
-    dialog.show();
+    if (!dialog.open) dialog.show();
   }
 
   dialog.addEventListener('close',() => {
@@ -485,7 +667,7 @@
   window.addEventListener('myledger-auth-request',async event => {
     if (handling || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
-    if (!currentUser) { showSignInForm(); return; }
+    if (!session) { showSignInForm(); return; }
     handling = true;
     try {
       const {auth,authSdk} = await connect();
@@ -497,7 +679,7 @@
     }
   });
   window.addEventListener('myledger-share-request',event => {
-    if (!ownerAccess || location.protocol !== 'https:' || dialog.open) return;
+    if (!ownerAccess || dialog.open) return;
     const copy = messages[event.detail] || messages.ar;
     const access = ownerAccess;
     dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.share}</h2></div>
@@ -515,8 +697,8 @@
       event.preventDefault();
       const button = form.querySelector('button');
       const status = dialog.querySelector('#share-message');
-      const recipient = form.elements.recipient.value.trim().toLowerCase();
-      if (ownerAccess !== access || recipient.includes('/') || recipient.length > 254) {
+      const recipient = normalizeEmail(form.elements.recipient.value);
+      if (ownerAccess !== access || !validEmail(recipient)) {
         status.textContent = copy.inviteFailed;
         return;
       }
@@ -526,9 +708,10 @@
         const {store,database} = access;
         const grant = store.doc(database,'accessInvites',recipient);
         await store.runTransaction(database,async tx => {
-          const code = (await tx.get(grant)).data()?.signupCode;
-          if (code) tx.delete(store.doc(database,'signupInvites',code));
-          tx.set(grant,{allowed:true});
+          if ((await tx.get(grant)).exists()) return;
+          const revocation = store.doc(database,'accessRevocations',recipient);
+          if ((await tx.get(revocation)).exists()) tx.delete(revocation);
+          tx.set(grant,{allowed:true,status:'pending'});
         });
         status.textContent = copy.invited + ' ' + recipient;
       } catch {
@@ -544,7 +727,6 @@
     const access = ownerAccess;
     const {store,database} = access;
     const copy = messages[event.detail] || messages.ar;
-    const collections = revocationEnabled ? ['accessInvites','accessRevocations'] : ['accessInvites'];
     dialog.innerHTML = `<div class="dialog-title"><h2 id="account-title">${copy.authorized}</h2></div>
       <p id="authorized-status" role="status"></p>
       <div id="authorized-results" class="authorized-results"></div>
@@ -557,99 +739,123 @@
     const results = dialog.querySelector('#authorized-results');
     const retry = dialog.querySelector('#retry-authorized');
     const stillOpen = () => ownerAccess === access && dialog.open && results.isConnected;
+    const busy = new Set();
+    const reconciling = new Set();
+    let stops = [];
+    let invites;
+    let users;
 
-    async function loadAuthorized() {
+    function stopList() {
+      stops.forEach(stop => stop());
+      stops = [];
+    }
+
+    function section(title,grants,stateLabel) {
+      const block = document.createElement('section');
+      const heading = document.createElement('h3');
+      heading.textContent = title;
+      block.append(heading);
+      if (!grants.length) {
+        const empty = document.createElement('p');
+        empty.textContent = copy.listEmpty;
+        block.append(empty);
+        return block;
+      }
+      const list = document.createElement('ul');
+      for (const grant of grants) {
+        const recipient = grant.id;
+        const item = document.createElement('li');
+        const value = document.createElement('bdi');
+        value.textContent = recipient;
+        const state = document.createElement('span');
+        state.textContent = stateLabel;
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'btn revoke-access';
+        remove.textContent = copy.revoke;
+        remove.disabled = busy.has(recipient);
+        remove.setAttribute('aria-label',copy.revoke + ' · ' + recipient);
+        remove.addEventListener('click',async () => {
+          if (!stillOpen() || busy.has(recipient)
+              || !window.confirm(copy.revokeConfirm + ' ' + recipient + '?')) return;
+          busy.add(recipient);
+          remove.disabled = true;
+          try {
+            await revokeGrant(access,recipient,() => true);
+            if (stillOpen()) {
+              status.textContent = copy.revoked + ' ' + recipient;
+              dialog.querySelector('form[method="dialog"] button')?.focus();
+            }
+          } catch {
+            if (stillOpen()) status.textContent = copy.revokeError;
+          } finally {
+            busy.delete(recipient);
+            if (stillOpen()) renderList();
+          }
+        });
+        item.append(value,state,remove);
+        list.append(item);
+      }
+      block.append(list);
+      return block;
+    }
+
+    function renderList() {
+      if (!stillOpen() || !invites || !users) return;
+      const pending = [];
+      const approved = [];
+      for (const entry of invites.docs) {
+        const grant = entry.data();
+        if (grant.allowed !== true) continue;
+        if (grant.status !== 'approved') {
+          pending.push(entry);
+        } else if (users.get(grant.uid) === entry.id) {
+          approved.push(entry);
+        } else if (!reconciling.has(entry.id)) {
+          reconciling.add(entry.id);
+          void revokeGrant(access,entry.id,(current,profile,email) =>
+            current.status === 'approved' && current.uid === grant.uid && profile?.email !== email
+          ).catch(() => {
+            if (stillOpen()) {
+              status.textContent = copy.revokeError;
+              retry.hidden = false;
+            }
+          }).finally(() => reconciling.delete(entry.id));
+        }
+      }
+      results.replaceChildren(
+        section(copy.invitations,pending,copy.waiting),
+        section(copy.users,approved,copy.approved)
+      );
+    }
+
+    function loadAuthorized() {
+      stopList();
+      invites = users = undefined;
       status.textContent = copy.listLoading;
       retry.hidden = true;
-      try {
-        const snapshots = await Promise.all(collections.map(name =>
-          store.getDocsFromServer(store.collection(database,name))));
-        if (!stillOpen()) return;
-        results.replaceChildren();
-        const [grants,pending] = snapshots;
-        const pendingEmails = new Set(pending?.docs.map(entry => entry.id));
-        const section = document.createElement('section');
-        const heading = document.createElement('h3');
-        heading.textContent = copy.authorizedEmails;
-        section.append(heading);
-        const approved = grants.docs.filter(entry => entry.data().allowed === true).map(entry => entry.id);
-        const recipients = [...new Set([...approved,...pendingEmails])].sort((a,b) => a.localeCompare(b));
-        const list = document.createElement(recipients.length ? 'ul' : 'p');
-        if (recipients.length) {
-          for (const recipient of recipients) {
-            const item = document.createElement('li');
-            const value = document.createElement('bdi');
-            value.dir = 'ltr';
-            value.textContent = recipient;
-            const remove = document.createElement('button');
-            remove.type = 'button';
-            remove.className = 'btn revoke-access';
-            const label = pendingEmails.has(recipient) ? copy.deletePending : copy.revoke;
-            remove.textContent = label;
-            remove.setAttribute('aria-label', label + ' · ' + recipient);
-            remove.addEventListener('click', async () => {
-              if (!stillOpen() || remove.disabled ||
-                  !window.confirm(copy.deleteConfirm
-                    + ' ' + recipient + '?')) return;
-
-              remove.disabled = true;
-              retry.hidden = true;
-              status.textContent = revocationEnabled ? copy.deleting : '';
-              try {
-                if (!revocationEnabled) throw new Error('deletion-unavailable');
-                const token = await access.user.getIdToken(true);
-                if (ownerAccess !== access) return;
-                const response = await fetch(revocationOrigin + '/revoke', {
-                  method: 'POST',
-                  redirect: 'error',
-                  headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ email: recipient })
-                });
-                const result = await response.json();
-                if (!response.ok || typeof result.accountDeleted !== 'boolean') {
-                  throw new Error(result.code || 'service-error');
-                }
-                const accountDeleted = result.accountDeleted;
-                if (!stillOpen()) return;
-                const next = item.nextElementSibling || item.previousElementSibling;
-                item.remove();
-                if (!list.childElementCount) {
-                  const empty = document.createElement('p');
-                  empty.textContent = copy.listEmpty;
-                  list.replaceWith(empty);
-                }
-                const focusTarget = next?.querySelector('button') || dialog.querySelector('form[method="dialog"] button');
-                focusTarget?.focus();
-                status.textContent = (accountDeleted ? copy.deleted : copy.revoked) + ' ' + recipient;
-              } catch (error) {
-                if (stillOpen()) {
-                  status.textContent = error.message === 'protected-account' ? copy.protectedAccount
-                    : error.message === 'deletion-unavailable' ? copy.deletionUnavailable : copy.deleteError;
-                  retry.hidden = !revocationEnabled;
-                  remove.disabled = false;
-                }
-              }
-            });
-            item.append(value,remove);
-            list.append(item);
-          }
-        } else {
-          list.textContent = copy.listEmpty;
-        }
-        section.append(list);
-        results.append(section);
-        status.textContent = '';
-      } catch {
-        if (!stillOpen()) return;
-        results.replaceChildren();
-        status.textContent = copy.listError;
-        retry.hidden = false;
-      }
+      const watch = (collection,receive) =>
+        store.onSnapshot(store.collection(database,collection),{includeMetadataChanges:true},snapshot => {
+          if (!stillOpen() || snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+          receive(snapshot);
+          if (invites && users && status.textContent === copy.listLoading) status.textContent = '';
+          renderList();
+        },() => {
+          if (!stillOpen()) return;
+          results.replaceChildren();
+          status.textContent = copy.listError;
+          retry.hidden = false;
+        });
+      stops = [
+        watch('accessInvites',snapshot => { invites = snapshot; }),
+        watch('users',snapshot => { users = new Map(snapshot.docs.map(doc => [doc.id,doc.data().email])); })
+      ];
     }
+
     retry.addEventListener('click',loadAuthorized);
-    dialog.addEventListener('close',() => results.replaceChildren(),{once:true});
+    dialog.addEventListener('close',stopList,{once:true});
     dialog.showModal();
-    void loadAuthorized();
+    loadAuthorized();
   });
   showSignInForm();
   if (supported) void connect().catch(() => {});
