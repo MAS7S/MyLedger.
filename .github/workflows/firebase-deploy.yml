@@ -24,13 +24,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '24'
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
       - name: Deploy Firebase resources
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: |
-          if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "::error::Add FIREBASE_TOKEN to this repository's Actions secrets."
-            exit 1
-          fi
-          npx --yes firebase-tools@15.37.0 deploy --only 'hosting,firestore:rules' --project my-ledger-8d0b3 --non-interactive
+        run: npx --yes firebase-tools@15.37.0 deploy --only 'hosting,firestore:rules' --project my-ledger-8d0b3 --non-interactive
 

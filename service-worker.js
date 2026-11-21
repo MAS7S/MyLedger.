@@ -4,8 +4,9 @@ const {revision,assets} = /* hosting-build */ {
   revision:'local',
   assets:['app.js','firebase.js','register-pwa.js','styles.css','manifest.webmanifest','icon-192.png','icon-512.png']
 };
-const cachePrefix = 'myledger-shell-';
-const cacheName = cachePrefix + revision;
+const PREFIX = 'myledger-shell-';
+const CACHE = PREFIX + "v1";
+const cacheName = revision === 'local' ? CACHE : `${CACHE}-${revision}`;
 const scope = new URL(self.registration.scope);
 const shellUrl = new URL('index.html',scope);
 const shell = shellUrl.href;
@@ -23,7 +24,7 @@ self.addEventListener('activate',event => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     // An in-flight page from the previous release may still request its fingerprinted files.
-    const previous = names.filter(name => name.startsWith(cachePrefix) && name !== cacheName);
+    const previous = names.filter(name => name.startsWith(PREFIX) && name !== cacheName);
     await Promise.all(previous.slice(0,-1).map(name => caches.delete(name)));
     await self.clients.claim();
   })());
@@ -32,7 +33,7 @@ self.addEventListener('activate',event => {
 async function cached(fallback) {
   if (fallback === shell) return (await caches.open(cacheName)).match(shell);
   const names = await caches.keys();
-  for (const name of names.filter(name => name.startsWith(cachePrefix)).reverse()) {
+  for (const name of names.filter(name => name.startsWith(PREFIX)).reverse()) {
     const response = await (await caches.open(name)).match(fallback);
     if (response) return response;
   }
