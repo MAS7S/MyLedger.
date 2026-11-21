@@ -403,11 +403,11 @@ function render() {
               <span ${entry.fee ? `title="${t('deduction')}"` : ''} class="entry-price ${entry.type === 'income' ? 'positive' : entry.type === 'expense' ? 'negative' : ''}">${entry.type === 'income' ? '+' : entry.type === 'expense' ? '−' : ''}${money(cost(entry))}</span>
               <div class="row-actions">${button('edit:'+entry.id,'edit',t('edit'),'icon-btn',true)}${button('remove:'+entry.id,'trash',t('remove'),'icon-btn',true)}</div>
             </div>`;
-  showSyncStatus();
           }).join('') || `<p class="empty">${t(filtered ? 'noMatches' : 'noEntries')}</p>`}</div>
         </article>
       </section>
     </main>`}`;
+  showSyncStatus();
 }
 
 const typeTitle = {income:'addIncome',expense:'addExpense',transfer:'transfer',pay:'pay',opening:'opening'};
