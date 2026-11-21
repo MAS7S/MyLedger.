@@ -49,6 +49,14 @@ origins you use in the project's Google Web OAuth client, including
 `https://my-ledger-8d0b3.web.app` and
 `https://my-ledger-8d0b3.firebaseapp.com` if you use both.
 
+GitHub Actions deploys Hosting and Firestore rules on pushes to `main`.
+Set the repository Actions secret `FIREBASE_SERVICE_ACCOUNT` to the complete
+JSON key for a Google Cloud service account authorized to deploy both resources
+in `my-ledger-8d0b3`. The workflow uses `google-github-actions/auth` to pass
+Application Default Credentials to the Firebase CLI.
+
+For a local deploy, authenticate the Firebase CLI and run the following command.
+
 ```sh
 firebase deploy --project my-ledger-8d0b3 --only firestore:rules,hosting
 ```
