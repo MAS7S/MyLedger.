@@ -12,6 +12,9 @@
 
   const googleClientId = '572111662694-ak1lh2f7tf8ief2d011vj4kb03k1apb5.apps.googleusercontent.com';
 
+  const revocationOrigin = "__MYLEDGER_REVOCATION_URL__";
+  const revocationEnabled = revocationOrigin.startsWith('https://');
+
   const messages = {
     ar: {
       createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'هذا البريد غير مصرح له من قبل المالك.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
@@ -20,7 +23,14 @@
       revoke:'إزالة الوصول', revokeConfirm:'هل تريد إزالة الوصول لـ',
       revoked:'تمت إزالة الوصول لـ', revokeError:'تعذّرت إزالة الوصول. أعد المحاولة.',
       authorized:'المصرّح لهم', invitations:'الدعوات', users:'المستخدمون',
-      waiting:'قيد الانتظار', approved:'موافق عليه',
+      waiting:'قيد الانتظار', active:'نشط',
+      waitingDetail:'بانتظار التحقق من البريد أو إكمال التسجيل.',
+      activeDetail:'تم التحقق من البريد والموافقة على الوصول.',
+      finishingRevocation:'إكمال إزالة الحساب',
+      revocationPending:'تم إيقاف الوصول. لم يُحذف حساب تسجيل الدخول بعد.',
+      revocationUnavailable:'خدمة إزالة الحساب غير مهيأة.',
+      offlineSignIn:'اتصل بالإنترنت لتسجيل الدخول.',
+      downloadUnsynced:'تنزيل نسخة احتياطية من التغييرات غير المتزامنة',
       resetPassword:'إعادة تعيين كلمة المرور', resetEmail:'أدخل بريدك الإلكتروني أولاً.',
       resetSent:'إذا كان لديك حساب مؤهّل، ستصلك رسالة إعادة تعيين كلمة المرور.',
       listLoading:'جارٍ تحميل القائمة…', listEmpty:'ما فيه بيانات في هذه القائمة.',
@@ -43,7 +53,14 @@
       revoke:'Remove access', revokeConfirm:'Remove access for',
       revoked:'Access removed for', revokeError:'Could not remove access. Try again.',
       authorized:'Authorized people', invitations:'Invitations', users:'Users',
-      waiting:'Pending', approved:'Approved',
+      waiting:'Pending', active:'Active',
+      waitingDetail:'Awaiting email verification or completion of registration.',
+      activeDetail:'Email verified and access approved.',
+      finishingRevocation:'Finish removing account',
+      revocationPending:'Access is blocked. The sign-in account has yet to be removed.',
+      revocationUnavailable:'The account removal service is not configured.',
+      offlineSignIn:'Connect to the internet to sign in.',
+      downloadUnsynced:'Download backup of unsynced changes',
       resetPassword:'Reset password', resetEmail:'Enter your email address first.',
       resetSent:'If you have an eligible account, you’ll receive a password reset email.',
       listLoading:'Loading access…', listEmpty:'No entries in this list.',
@@ -93,7 +110,13 @@
       const services = {auth,authSdk,store,database};
       const authChanged = user => {
         if (session?.user === user) return;
-        if (session) leaveSession(session);
+        if (session) {
+          if (!user && session.checking && !session.signingOut && !session.denied && session.adapter) {
+            protectDraft(session);
+            accessNotice = 'accessRevoked';
+          }
+          leaveSession(session);
+        }
         if (user) {
           accessNotice = undefined;
           session = {services,user,stops:[],exchange:googleExchange};
@@ -176,6 +199,9 @@
   }
 
   function authError(copy,error) {
+    if (!navigator.onLine || error.code === 'auth/network-request-failed' || error.code === 'unavailable') {
+      return copy.offlineSignIn;
+    }
     return error.code === 'myledger/access-denied'
       ? copy.denied : [copy.error,error.code].filter(Boolean).join(' · ');
   }
@@ -185,7 +211,7 @@
   }
 
   function activeSession(state) {
-    return session === state && state.services.auth.currentUser === state.user;
+    return !state.denied && session === state && state.services.auth.currentUser === state.user;
   }
 
   function hideAccount(state) {
@@ -206,9 +232,21 @@
     hideAccount(state);
   }
 
+  function setSyncReady(state,ready) {
+    state.ready = ready;
+    if (!state.adapter) return;
+    window.dispatchEvent(new CustomEvent('myledger-connection',{detail:{adapter:state.adapter,ready}}));
+  }
+
+  function protectDraft(state) {
+    if (!state.owner) window.dispatchEvent(new CustomEvent('myledger-revoked',{detail:state.user.uid}));
+  }
+
   async function denySession(state,notice) {
     if (!activeSession(state)) return;
+    state.denied = true;
     accessNotice = notice;
+    protectDraft(state);
     hideAccount(state);
     stopAccessWatches(state);
     const {auth,authSdk} = state.services;
@@ -217,9 +255,9 @@
         state.newGoogleAccount = false;
         try { await authSdk.deleteUser(state.user); } catch {}
       }
-      if (activeSession(state)) await authSdk.signOut(auth);
+      if (auth.currentUser === state.user) await authSdk.signOut(auth);
     } catch {
-      if (activeSession(state)) {
+      if (auth.currentUser === state.user) {
         const copy = messages[loginLanguage];
         showAccessStatus(copy,copy[notice],state);
       }
@@ -273,7 +311,7 @@
   }
 
   function watchAccess(state,references,owner) {
-    const {auth,store,database} = state.services;
+    const {store} = state.services;
     const confirmed = new Set();
     const copy = messages[loginLanguage];
     references.forEach(([reference,valid]) => {
@@ -281,32 +319,32 @@
         if (!activeSession(state) || snapshot.metadata.hasPendingWrites) return;
         if (snapshot.metadata.fromCache) {
           confirmed.delete(reference);
-          hideAccount(state);
-          showAccessStatus(copy,copy.pending,state,false,true);
+          setSyncReady(state,false);
           return;
         }
         if (!valid(snapshot)) {
-          hideAccount(state);
-          if (!owner && reference.path.startsWith('users/')) {
-            void checkAccess(state);
-          } else {
-            void denySession(state,'accessRevoked');
-          }
+          void denySession(state,'accessRevoked');
           return;
         }
         confirmed.add(reference);
-        if (confirmed.size !== references.length || state.adapter) return;
+        if (confirmed.size !== references.length || !navigator.onLine) return;
+        if (state.adapter) {
+          if (!state.ready && !state.checking) void checkAccess(state);
+          return;
+        }
         if (owner) ownerAccess = {...state.services};
         if (dialog.open) dialog.close();
-        state.adapter = ledgerAdapter(store,database,auth,state.user.uid,owner);
+        state.ready = true;
+        state.adapter = ledgerAdapter(state,owner);
         accountChanged(state.adapter);
       },error => {
         if (!activeSession(state)) return;
-        hideAccount(state);
         if (error.code === 'permission-denied') {
           void denySession(state,'accessRevoked');
         } else {
-          showAccessStatus(copy,authError(copy,error),state,false,true);
+          state.watchFailed = true;
+          setSyncReady(state,false);
+          if (!state.adapter) showAccessStatus(copy,authError(copy,error),state,false,true);
         }
       }));
     });
@@ -314,13 +352,18 @@
 
   async function checkAccess(state) {
     if (!activeSession(state)) return;
+    const copy = messages[loginLanguage];
+    if (!navigator.onLine) {
+      setSyncReady(state,false);
+      if (!state.adapter) showAccessStatus(copy,copy.offlineSignIn,state,false,true);
+      return;
+    }
     if (state.checking) {
       state.checkAgain = true;
       return;
     }
     const {authSdk,store,database} = state.services;
     const {user} = state;
-    const copy = messages[loginLanguage];
     state.checking = true;
     if (!state.adapter) showAccessStatus(copy,copy.pending,state);
     try {
@@ -331,9 +374,8 @@
         if (!activeSession(state)) return;
       }
       if (state.email && !state.owner && await authAccountRemoved(state)) {
-        hideAccount(state);
-        try { await revokeGrant(state.services,state.email,grant => grant.uid === user.uid); }
-        finally { await denySession(state,'accessRevoked'); }
+        void revokeGrant(state.services,state.email,grant => grant.uid === user.uid).catch(() => {});
+        await denySession(state,'accessRevoked');
         return;
       }
       await authSdk.reload(user);
@@ -346,13 +388,16 @@
       const registered = (await store.getDocFromServer(profile)).data();
       if (!activeSession(state)) return;
       if (registered && (!verified || registered.email !== email)) {
-        hideAccount(state);
-        const removed = await revokeGrant(state.services,registered.email,grant => grant.uid === user.uid);
-        if (!removed) await store.deleteDoc(profile);
-        await denySession(state,'accessRevoked');
+        try {
+          const removed = await revokeGrant(state.services,registered.email,grant => grant.uid === user.uid);
+          if (!removed) await store.deleteDoc(profile);
+        } finally {
+          await denySession(state,'accessRevoked');
+        }
         return;
       }
       if (!verified) {
+        if (state.adapter) { await denySession(state,'accessRevoked'); return; }
         if (validEmail(email)) await checkEmailAccess(state.services,email,true);
         if (activeSession(state)) {
           showAccessStatus(copy,state.verificationSent ? copy.verificationSent : copy.confirmEmail,state,true);
@@ -368,9 +413,14 @@
       }
       if (!activeSession(state)) return;
       state.newGoogleAccount = false;
-      if (state.adapter && state.owner === owner && state.email === email) return;
-      hideAccount(state);
+      const sameAccount = state.adapter && state.owner === owner && state.email === email;
+      if (sameAccount && !state.watchFailed) {
+        setSyncReady(state,navigator.onLine);
+        return;
+      }
+      if (!sameAccount) hideAccount(state);
       stopAccessWatches(state);
+      state.watchFailed = false;
       state.owner = owner;
       state.email = email;
       if (owner) {
@@ -384,16 +434,16 @@
         }],
         [profile,snapshot => snapshot.data()?.email === email]
       ],owner);
+      if (sameAccount) setSyncReady(state,navigator.onLine);
     } catch (error) {
       if (!activeSession(state)) return;
-      hideAccount(state);
-      stopAccessWatches(state);
+      setSyncReady(state,false);
       if (invalidAuth.has(error.code) || ['myledger/access-denied','permission-denied'].includes(error.code)) {
         if (state.email && !state.owner && ['auth/user-not-found','auth/user-disabled'].includes(error.code)) {
-          await revokeGrant(state.services,state.email,grant => grant.uid === user.uid).catch(() => {});
+          void revokeGrant(state.services,state.email,grant => grant.uid === user.uid).catch(() => {});
         }
         await denySession(state,error.code === 'myledger/access-denied' && !state.email ? 'signupDenied' : 'accessRevoked');
-      } else {
+      } else if (!state.adapter) {
         showAccessStatus(copy,authError(copy,error),state,false,true);
       }
     } finally {
@@ -418,15 +468,33 @@
     });
     const result = await response.json();
     if (!response.ok) return ['USER_NOT_FOUND','USER_DISABLED','EMAIL_NOT_FOUND'].includes(result.error?.message);
-    const account = result.users?.find(record => record.localId === state.user.uid);
+    if (!Array.isArray(result.users)) return false;
+    const account = result.users.find(record => record.localId === state.user.uid);
     return !account || account.disabled === true;
   }
 
   function recheckSession() {
-    if (session && document.visibilityState === 'visible') void checkAccess(session);
+    if (session) void checkAccess(session);
   }
-  document.addEventListener('visibilitychange',recheckSession);
-  window.addEventListener('online',recheckSession);
+  document.addEventListener('visibilitychange',() => {
+    if (document.visibilityState === 'visible') recheckSession();
+  });
+  window.addEventListener('online',() => {
+    if (session) recheckSession();
+    else if (supported) void connect().catch(() => {});
+    const message = dialog.querySelector('#email-auth ~ #account-message');
+    if (message?.textContent === messages[loginLanguage].offlineSignIn) {
+      message.textContent = accessNotice ? messages[loginLanguage][accessNotice] : '';
+    }
+  });
+  window.addEventListener('offline',() => {
+    if (session) {
+      setSyncReady(session,false);
+      if (!session.adapter) void checkAccess(session);
+    }
+    const message = dialog.querySelector('#email-auth ~ #account-message');
+    if (message) message.textContent = messages[loginLanguage].offlineSignIn;
+  });
   window.setInterval(recheckSession,60000);
 
   function showAccessStatus(copy,text,state,unverified=false,retry=false) {
@@ -442,7 +510,15 @@
     dialog.setAttribute('aria-labelledby','account-title');
     const status = dialog.querySelector('#account-message');
     status.textContent = text;
-    const {auth,authSdk} = state.services;
+    if (state.denied) {
+      const backup = document.createElement('a');
+      backup.id = 'unsynced-backup';
+      backup.hidden = true;
+      backup.textContent = copy.downloadUnsynced;
+      dialog.append(backup);
+      window.dispatchEvent(new CustomEvent('myledger-backup-link',{detail:backup}));
+    }
+    const {authSdk} = state.services;
     const {user} = state;
     const onClick = (selector,work) => dialog.querySelector(selector)?.addEventListener('click',async event => {
       const button = event.currentTarget;
@@ -451,7 +527,7 @@
       catch (error) { status.textContent = authError(copy,error); }
       finally { button.disabled = false; }
     });
-    onClick('#other-account',() => authSdk.signOut(auth));
+    onClick('#other-account',() => signOut(state));
     onClick('#send-verification',async () => {
       await checkEmailAccess(state.services,user.email,true);
       if (!activeSession(state) || !status.isConnected) return;
@@ -463,30 +539,39 @@
     dialog.show();
   }
 
-  function ledgerAdapter(store,database,auth,uid,canInvite) {
+  async function signOut(state) {
+    state.signingOut = true;
+    try { await state.services.authSdk.signOut(state.services.auth); }
+    finally { state.signingOut = false; }
+  }
+
+  function ledgerAdapter(state,canInvite) {
+    const {store,database} = state.services;
+    const {uid} = state.user;
     const reference = store.doc(database,'users',uid,'ledger','current');
-    let revision = 0;
     return {
-      canInvite,
+      uid,canInvite,
+      isReady: () => state.ready,
+      deny: () => void denySession(state,'accessRevoked'),
       async load() {
         const snapshot = await store.getDocFromServer(reference);
-        revision = snapshot.exists() ? snapshot.data().revision : 0;
-        return snapshot.exists() ? snapshot.data().payload : null;
+        return snapshot.exists() ? snapshot.data() : {revision:0,payload:null};
       },
-      async save(payload) {
-        if (new TextEncoder().encode(payload).length > 700000) {
-          throw Object.assign(new Error('Ledger too large'),{code:'ledger-limit'});
-        }
-        const expected = revision;
-        await store.runTransaction(database,async transaction => {
-          if (auth.currentUser?.uid !== uid) throw new Error('Account changed');
+      async save(payload,expected) {
+        return store.runTransaction(database,async transaction => {
+          if (!activeSession(state) || !state.ready || !navigator.onLine) {
+            throw Object.assign(new Error('Rechecking access'),{code:'myledger/access-pending'});
+          }
           const snapshot = await transaction.get(reference);
-          if ((snapshot.exists() ? snapshot.data().revision : 0) !== expected) {
+          const saved = snapshot.data();
+          const revision = saved?.revision ?? 0;
+          if (revision === expected + 1 && saved.payload === payload) return revision;
+          if (revision !== expected) {
             throw Object.assign(new Error('Ledger changed'),{code:'ledger-conflict'});
           }
           transaction.set(reference,{revision:expected + 1,payload});
+          return expected + 1;
         });
-        revision = expected + 1;
       }
     };
   }
@@ -517,7 +602,8 @@
       <div class="login-switch">${creating ? '' : label('firstTime')}
         <button type="button" id="create-account-toggle">${label(creating ? 'backToSignIn' : 'createAccount')}</button>
       </div>
-      <p role="status" id="account-message"></p>`;
+      <p role="status" id="account-message"></p>
+      <a id="unsynced-backup" hidden></a>`;
     dialog.setAttribute('aria-labelledby','account-title');
     const message = dialog.querySelector('#account-message');
     const google = dialog.querySelector('#google-sign-in');
@@ -537,7 +623,11 @@
       const toggle = dialog.querySelector('#login-language');
       toggle.textContent = loginLanguage === 'ar' ? 'English' : 'العربية';
       toggle.lang = loginLanguage === 'ar' ? 'en' : 'ar';
-      message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice] : '';
+      message.textContent = !supported ? copy.origin : accessNotice ? copy[accessNotice]
+        : !navigator.onLine ? copy.offlineSignIn : '';
+      const backup = dialog.querySelector('#unsynced-backup');
+      backup.textContent = copy.downloadUnsynced;
+      window.dispatchEvent(new CustomEvent('myledger-backup-link',{detail:backup}));
     }
 
     function renderGoogleButton() {
@@ -559,6 +649,7 @@
 
     async function withAuth(work,showError=error => authError(copy,error)) {
       if (handling) return;
+      if (!navigator.onLine) { message.textContent = copy.offlineSignIn; return; }
       handling = true;
       const buttons = form.querySelectorAll('button');
       buttons.forEach(button => { button.disabled = true; });
@@ -594,7 +685,7 @@
       });
       renderGoogleButton();
     }).catch(error => {
-      if (google.isConnected && !handling) message.textContent = authError(copy,error);
+      if (google.isConnected && !handling && !accessNotice) message.textContent = authError(copy,error);
     });
 
     form.addEventListener('submit',event => {
@@ -670,8 +761,7 @@
     if (!session) { showSignInForm(); return; }
     handling = true;
     try {
-      const {auth,authSdk} = await connect();
-      await authSdk.signOut(auth);
+      await signOut(session);
     } catch {
       document.querySelector('#status').textContent = copy.out;
     } finally {
@@ -710,7 +800,7 @@
         await store.runTransaction(database,async tx => {
           if ((await tx.get(grant)).exists()) return;
           const revocation = store.doc(database,'accessRevocations',recipient);
-          if ((await tx.get(revocation)).exists()) tx.delete(revocation);
+          if ((await tx.get(revocation)).exists()) throw new Error('Account removal pending');
           tx.set(grant,{allowed:true,status:'pending'});
         });
         status.textContent = copy.invited + ' ' + recipient;
@@ -744,50 +834,70 @@
     let stops = [];
     let invites;
     let users;
+    let revocations;
+
+    async function removeAccess(email) {
+      if (!revocationEnabled) throw new Error('revocation-unavailable');
+      const token = await access.auth.currentUser.getIdToken(true);
+      if (ownerAccess !== access) throw new Error('Account changed');
+      const response = await fetch(revocationOrigin + '/revoke',{
+        method:'POST',
+        redirect:'error',
+        headers:{Authorization:'Bearer ' + token,'Content-Type':'application/json'},
+        body:JSON.stringify({email})
+      });
+      const result = await response.json();
+      if (!response.ok || typeof result.accountDeleted !== 'boolean') throw new Error('Revocation failed');
+    }
 
     function stopList() {
       stops.forEach(stop => stop());
       stops = [];
     }
 
-    function section(title,grants,stateLabel) {
+    function section(title,recipients,stateLabel,stateDetail,removing=false) {
       const block = document.createElement('section');
       const heading = document.createElement('h3');
       heading.textContent = title;
       block.append(heading);
-      if (!grants.length) {
+      if (!recipients.length) {
         const empty = document.createElement('p');
         empty.textContent = copy.listEmpty;
         block.append(empty);
         return block;
       }
       const list = document.createElement('ul');
-      for (const grant of grants) {
-        const recipient = grant.id;
+      for (const recipient of recipients) {
         const item = document.createElement('li');
         const value = document.createElement('bdi');
         value.textContent = recipient;
         const state = document.createElement('span');
-        state.textContent = stateLabel;
+        state.className = 'access-state';
+        const label = document.createElement('strong');
+        label.textContent = stateLabel;
+        const detail = document.createElement('small');
+        detail.textContent = stateDetail;
+        state.append(label,detail);
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'btn revoke-access';
-        remove.textContent = copy.revoke;
+        remove.textContent = removing ? copy.finishingRevocation : copy.revoke;
         remove.disabled = busy.has(recipient);
-        remove.setAttribute('aria-label',copy.revoke + ' · ' + recipient);
+        remove.setAttribute('aria-label',remove.textContent + ' · ' + recipient);
         remove.addEventListener('click',async () => {
           if (!stillOpen() || busy.has(recipient)
               || !window.confirm(copy.revokeConfirm + ' ' + recipient + '?')) return;
           busy.add(recipient);
           remove.disabled = true;
           try {
-            await revokeGrant(access,recipient,() => true);
+            await removeAccess(recipient);
             if (stillOpen()) {
               status.textContent = copy.revoked + ' ' + recipient;
               dialog.querySelector('form[method="dialog"] button')?.focus();
             }
-          } catch {
-            if (stillOpen()) status.textContent = copy.revokeError;
+          } catch (error) {
+            if (stillOpen()) status.textContent = error.message === 'revocation-unavailable'
+              ? copy.revocationUnavailable : copy.revokeError;
           } finally {
             busy.delete(recipient);
             if (stillOpen()) renderList();
@@ -801,17 +911,17 @@
     }
 
     function renderList() {
-      if (!stillOpen() || !invites || !users) return;
+      if (!stillOpen() || !invites || !users || !revocations) return;
       const pending = [];
-      const approved = [];
+      const active = [];
       for (const entry of invites.docs) {
         const grant = entry.data();
-        if (grant.allowed !== true) continue;
+        if (grant.allowed !== true || revocations.has(entry.id)) continue;
         if (grant.status !== 'approved') {
-          pending.push(entry);
+          pending.push(entry.id);
         } else if (users.get(grant.uid) === entry.id) {
-          approved.push(entry);
-        } else if (!reconciling.has(entry.id)) {
+          active.push(entry.id);
+        } else if (!reconciling.has(entry.id) && !busy.has(entry.id)) {
           reconciling.add(entry.id);
           void revokeGrant(access,entry.id,(current,profile,email) =>
             current.status === 'approved' && current.uid === grant.uid && profile?.email !== email
@@ -824,21 +934,25 @@
         }
       }
       results.replaceChildren(
-        section(copy.invitations,pending,copy.waiting),
-        section(copy.users,approved,copy.approved)
+        section(copy.invitations,pending,copy.waiting,copy.waitingDetail),
+        section(copy.users,active,copy.active,copy.activeDetail)
       );
+      if (revocations.size) {
+        results.append(section(copy.revoke,[...revocations],copy.finishingRevocation,copy.revocationPending,true));
+      }
     }
 
     function loadAuthorized() {
       stopList();
       invites = users = undefined;
+      revocations = revocationEnabled ? undefined : new Set();
       status.textContent = copy.listLoading;
       retry.hidden = true;
       const watch = (collection,receive) =>
         store.onSnapshot(store.collection(database,collection),{includeMetadataChanges:true},snapshot => {
           if (!stillOpen() || snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
           receive(snapshot);
-          if (invites && users && status.textContent === copy.listLoading) status.textContent = '';
+          if (invites && users && revocations && status.textContent === copy.listLoading) status.textContent = '';
           renderList();
         },() => {
           if (!stillOpen()) return;
@@ -850,6 +964,9 @@
         watch('accessInvites',snapshot => { invites = snapshot; }),
         watch('users',snapshot => { users = new Map(snapshot.docs.map(doc => [doc.id,doc.data().email])); })
       ];
+      if (revocationEnabled) {
+        stops.push(watch('accessRevocations',snapshot => { revocations = new Set(snapshot.docs.map(doc => doc.id)); }));
+      }
     }
 
     retry.addEventListener('click',loadAuthorized);

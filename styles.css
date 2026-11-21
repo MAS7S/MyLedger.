@@ -84,3 +84,10 @@ body:has(#account-auth[open] #email-auth){background:#f7f1f3}
 
 .authorized-results li{flex-wrap:wrap}
 #authorized-status{overflow-wrap:anywhere}
+
+.access-state{display:grid;gap:3px}
+.access-state small{color:var(--muted)}
+#sync-status:empty{display:none}
+#unsynced-backup{display:inline-block;margin-top:10px;color:var(--login-accent)}
+#unsynced-backup[hidden]{display:none}
+@media print{#sync-status{display:none!important}}

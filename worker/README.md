@@ -1,11 +1,10 @@
 # تفعيل حذف حسابات MyLedger من Cloudflare
 
-هذا الدليل يخص التكامل السابق. زر «إزالة الوصول» في تطبيق MyLedger الحالي
-يستخدم Firestore مباشرة، وأزيل متغير `MYLEDGER_REVOCATION_URL` من عملية
-النشر. خطوات الربط والنشر أدناه مرجع للإصدارات السابقة فقط.
-
-
-زر «إزالة الوصول» يحذف تصريح البريد في Firestore، ثم يحذف حسابه من **Firebase Authentication → Users**. يحتفظ MyLedger ببيانات الدفتر. إذا تعذّر حذف الحساب بعد سحب التصريح، يبقى الوصول موقوفًا ويظهر «إكمال حذف الحساب» عند إعادة فتح قائمة المصرّح لهم. حماية الزر تعتمد على رمز جلسة Firebase والتحقق من سجل المالك في Firestore.
+يستدعي زر «إزالة الوصول» مسار `/revoke` في Worker. تحذف العملية الدعوة وسجل
+المستخدم المطابق ورابط التسجيل القديم من Firestore، ثم تحذف الحساب من
+**Firebase Authentication → Users**. تبقى بيانات الدفتر محفوظة. إذا تعذّر
+حذف الحساب، يبقى الوصول موقوفًا ويظهر زر «إكمال إزالة الحساب» في قائمة
+المصرّح لهم. يتحقق Worker من جلسة Firebase ومن صلاحية المالك في Firestore.
 
 ## 1. إنشاء حساب خدمة لـ MyLedger
 
@@ -39,4 +38,4 @@ Get-Content -Raw "$env:USERPROFILE\Downloads\myledger-revoker.json" | npx.cmd --
 
 1. افتح [متغيرات GitHub Actions لمستودع MyLedger](https://github.com/MAS7S/MyLedger./settings/variables/actions). أضف **Repository variable** باسم `MYLEDGER_REVOCATION_URL` وقيمته عنوان Worker، مثل `https://myledger-revoke.example.workers.dev`.
 2. افتح [Deploy MyLedger to Firebase](https://github.com/MAS7S/MyLedger./actions/workflows/firebase-deploy.yml)، ثم اضغط **Run workflow** واختر `main`. بعد نجاحه، افتح MyLedger من [الرابط المعتاد](https://my-ledger-8d0b3.web.app/).
-3. للتحقق، سجّل الدخول كمالك وألغِ وصول بريد اختباري مصرح به له حساب Firebase، ثم تحقق من اختفائه من **Authentication → Users**. يستمر زر إزالة التصريح الحالي في العمل حتى إعداد عنوان Worker وإعادة النشر.
+3. للتحقق، سجّل الدخول كمالك وألغِ وصول بريد اختباري مصرح به له حساب Firebase، ثم تحقق من اختفائه من **Authentication → Users**.

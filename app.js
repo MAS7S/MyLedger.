@@ -13,6 +13,9 @@ const labels = {
   signIn:['تسجيل الدخول','Sign in'], share:['منح الوصول','Grant access'], authorized:['المصرّح لهم','Authorized people'], signOut:['تسجيل الخروج','Sign out'],
   cloudLoading:['جارٍ فتح بيانات الحساب…','Loading account data…'],
   cloudReadError:['تعذّر تحميل الحساب. أعد المحاولة أو سجّل الخروج.','Could not load your account. Retry or sign out.'],
+  waitingToSync:['بانتظار الاتصال للمزامنة','Waiting for connection to sync'],
+  syncing:['جارٍ مزامنة التغييرات…','Syncing changes…'],
+  discardDraft:['ستُستبدل التغييرات غير المتزامنة بالبيانات السحابية. هل تريد المتابعة؟','Replace your unsynced changes with the cloud data?'],
   cloudSaveError:['تعذّر الحفظ في Firebase. حاول مرة أخرى.','Could not save to Firebase. Try again.'],
   cloudConflict:['تغيّرت البيانات على جهاز آخر. أعد تحميل الحساب قبل تعديلها.','Data changed on another device. Reload the account before editing.'],
   cloudLimit:['حجم البيانات يتجاوز سعة المزامنة. احفظ نسخة احتياطية.','Data exceeds sync capacity. Export a backup.'],
@@ -119,7 +122,11 @@ catch { data = demoData(); }
 let localData = data;
 let cloud = null;
 let cloudState = 'local';
-let cloudBusy = false;
+let cloudOnline = false;
+let cloudVersion = 0;
+let cloudPayload;
+let syncing = false;
+const draftKey = uid => key + ':draft:' + uid;
 let session = 0;
 const cloudEnabled = document.body.hasAttribute('data-firebase');
 
@@ -127,32 +134,137 @@ function emptyAccount() {
   return {opening:{cash:0,bank:0},entries:[],custom:{income:[],expense:[]},lang:localData.lang};
 }
 
-async function loadAccount(adapter) {
+function readDraft(uid) {
+  try {
+    const draft = JSON.parse(localStorage.getItem(draftKey(uid)));
+    if (Number.isSafeInteger(draft?.base) && draft.base >= 0 && parseBackup(draft.payload)
+        && (!draft.sending || parseBackup(draft.sending))) return draft;
+  } catch {}
+  return null;
+}
+
+function writeDraft(uid,draft) {
+  localStorage.setItem(draftKey(uid),JSON.stringify(draft));
+}
+
+function showSyncStatus() {
+  const indicator = app.querySelector('#sync-status');
+  if (!indicator) return;
+  indicator.textContent = !cloudOnline ? t('waitingToSync')
+    : syncing || readDraft(cloud.uid) ? t('syncing') : '';
+}
+
+async function loadAccount(adapter,discardDraft=false) {
   const attempt = ++session;
+  const previous = {data,state:cloudState};
+  const discarded = discardDraft ? localStorage.getItem(draftKey(adapter.uid)) : null;
   cloud = adapter;
+  syncing = false;
+  cloudOnline = Boolean(adapter?.isReady() && navigator.onLine);
   if (editor.open) editor.close();
   cloudState = adapter ? 'loading' : 'local';
   data = adapter ? emptyAccount() : localData;
   render();
   if (!adapter) return;
   try {
-    const payload = await adapter.load();
+    const {payload,revision} = await adapter.load();
     if (attempt !== session) return;
-    if (payload !== null) {
-      const loaded = parseBackup(payload);
-      if (!loaded) throw new Error('Invalid ledger');
-      data = loaded;
+    const loaded = payload === null ? emptyAccount() : parseBackup(payload);
+    if (!loaded) throw new Error('Invalid ledger');
+    if (discardDraft && localStorage.getItem(draftKey(adapter.uid)) === discarded) {
+      localStorage.removeItem(draftKey(adapter.uid));
     }
+    const draft = readDraft(adapter.uid);
+    cloudVersion = revision;
+    cloudPayload = draft?.payload;
+    data = draft ? parseBackup(draft.payload) : loaded;
     cloudState = 'ready';
-  } catch {
+  } catch (error) {
     if (attempt !== session) return;
-    cloudState = 'error';
+    if (error.code === 'permission-denied') { adapter.deny(); return; }
+    cloudState = discardDraft ? previous.state : 'error';
+    if (discardDraft) data = previous.data;
   }
   render();
+  void syncDraft();
 }
+
+async function syncDraft() {
+  if (!cloud || !cloudOnline || !navigator.onLine || syncing || cloudState !== 'ready') return;
+  const adapter = cloud;
+  const attempt = session;
+  let draft = readDraft(adapter.uid);
+  if (!draft || draft.payload !== cloudPayload) return;
+  syncing = true;
+  showSyncStatus();
+  try {
+    while (draft && attempt === session && cloudOnline && navigator.onLine) {
+      const sending = draft.sending || draft.payload;
+      // Persist the attempted payload so a lost response can be reconciled on retry.
+      writeDraft(adapter.uid,{...draft,sending});
+      const revision = await adapter.save(sending,draft.base);
+      if (attempt !== session) return;
+      cloudVersion = revision;
+      const latest = readDraft(adapter.uid);
+      if (latest?.base !== draft.base || latest.sending !== sending) break;
+      draft = latest.payload === sending ? null
+        : {base:revision,payload:latest.payload,owner:latest.owner};
+      if (draft) writeDraft(adapter.uid,draft);
+      else localStorage.removeItem(draftKey(adapter.uid));
+    }
+  } catch (error) {
+    if (attempt !== session) return;
+    if (error.code === 'permission-denied') { adapter.deny(); return; }
+    if (error.code === 'ledger-conflict') {
+      cloudState = 'conflict';
+      if (editor.open) editor.close();
+      render();
+    } else if (error.code !== 'myledger/access-pending') {
+      cloudOnline = false;
+    }
+  } finally {
+    if (attempt === session) {
+      syncing = false;
+      showSyncStatus();
+    }
+  }
+}
+
 if (cloudEnabled) {
   window.addEventListener('myledger-account', event => void loadAccount(event.detail));
+  window.addEventListener('myledger-connection', event => {
+    if (cloud !== event.detail.adapter) return;
+    cloudOnline = event.detail.ready;
+    showSyncStatus();
+    if (cloudOnline && cloudState === 'error') void loadAccount(cloud);
+    else if (cloudOnline) void syncDraft();
+  });
+  window.addEventListener('myledger-revoked',event => {
+    const uid = event.detail;
+    const draft = readDraft(uid);
+    if (!draft || draft.owner === true) return;
+    const backup = {payload:draft.payload};
+    if (backupUrl) URL.revokeObjectURL(backupUrl);
+    backupUrl = undefined;
+    unsyncedBackup = backup;
+    try { sessionStorage.setItem(backupKey,JSON.stringify(backup)); } catch {}
+    try { download(backupName,'application/json',backup.payload); } catch {}
+    try { localStorage.removeItem(draftKey(uid)); } catch {}
+  });
 }
+const backupKey = 'myledger-revocation-backup';
+const backupName = 'myledger-unsynced-backup.json';
+let unsyncedBackup;
+let backupUrl;
+try { unsyncedBackup = JSON.parse(sessionStorage.getItem(backupKey)); } catch {}
+window.addEventListener('myledger-backup-link', event => {
+  if (typeof unsyncedBackup?.payload !== 'string') return;
+  const link = event.detail;
+  backupUrl ||= URL.createObjectURL(new Blob([unsyncedBackup.payload],{type:'application/json'}));
+  link.href = backupUrl;
+  link.download = backupName;
+  link.hidden = false;
+});
 const t = name => labels[name]?.[data.lang === 'ar' ? 0 : 1] ?? name;
 const locale = () => data.lang === 'ar' ? 'ar-SA-u-ca-gregory-nu-latn' : 'en';
 const number = cents => new Intl.NumberFormat(locale(), {minimumFractionDigits:2,maximumFractionDigits:2}).format(cents / 100);
@@ -224,10 +336,12 @@ function render() {
     ${unavailable ? `<main><div class="card" role="status">
       <p>${t(cloudState === 'loading' ? 'cloudLoading' : cloudState === 'conflict' ? 'cloudConflict' : 'cloudReadError')}</p>
       ${cloudState === 'loading' ? '' : button('reload-cloud','wallet',t('reloadCloud'))}
+      ${cloudState === 'conflict' ? button('export-backup','download',t('exportBackup')) : ''}
     </div></main>` : `<main>
       <div class="heading"><div><h1>${t('overview')}</h1><p class="subtitle">${t('intro')}</p></div>
         ${button('opening','wallet',t('opening'))}
       </div>
+      ${cloud ? '<p id="sync-status" role="status" class="subtitle"></p>' : ''}
       <section class="overview" aria-label="${t('overview')}">
         ${card('total',balances.cash+balances.bank,'wallet','hero')}
         ${card('cashBalance',balances.cash,'cash')}
@@ -289,6 +403,7 @@ function render() {
               <span ${entry.fee ? `title="${t('deduction')}"` : ''} class="entry-price ${entry.type === 'income' ? 'positive' : entry.type === 'expense' ? 'negative' : ''}">${entry.type === 'income' ? '+' : entry.type === 'expense' ? '−' : ''}${money(cost(entry))}</span>
               <div class="row-actions">${button('edit:'+entry.id,'edit',t('edit'),'icon-btn',true)}${button('remove:'+entry.id,'trash',t('remove'),'icon-btn',true)}</div>
             </div>`;
+  showSyncStatus();
           }).join('') || `<p class="empty">${t(filtered ? 'noMatches' : 'noEntries')}</p>`}</div>
         </article>
       </section>
@@ -411,26 +526,23 @@ async function persist(candidate) {
     data = localData = candidate;
     return null;
   }
-  if (cloudBusy || cloudState !== 'ready') return 'cloudSaveError';
-  const attempt = session;
-  cloudBusy = true;
-  try {
-    await cloud.save(JSON.stringify({version:1,data:candidate}));
-    if (attempt !== session) return 'session';
-    data = candidate;
-    return null;
-  } catch (error) {
-    if (attempt !== session) return 'session';
-    if (error.code === 'ledger-conflict') {
-      cloudState = 'conflict';
-      if (editor.open) editor.close();
-      render();
-      return 'cloudConflict';
-    }
-    return error.code === 'ledger-limit' ? 'cloudLimit' : 'cloudSaveError';
-  } finally {
-    cloudBusy = false;
+  if (cloudState !== 'ready') return 'cloudSaveError';
+  const payload = JSON.stringify({version:1,data:candidate});
+  if (new TextEncoder().encode(payload).length > 700000) return 'cloudLimit';
+  const draft = readDraft(cloud.uid);
+  if (draft && draft.payload !== cloudPayload) {
+    data = parseBackup(draft.payload);
+    cloudState = 'conflict';
+    if (editor.open) editor.close();
+    render();
+    return 'cloudConflict';
   }
+  try { writeDraft(cloud.uid,{...(draft || {base:cloudVersion}),payload,owner:cloud.canInvite}); }
+  catch { return 'storageError'; }
+  data = candidate;
+  cloudPayload = payload;
+  void syncDraft();
+  return null;
 }
 let timer;
 function announce(message) {
@@ -443,12 +555,15 @@ document.addEventListener('click',async event => {
   const control = event.target.closest('[data-action]');
   if (!control) return;
   const [action,id] = control.dataset.action.split(':');
-  if (cloudBusy) return;
   if (['cloud-auth','cloud-share','cloud-authorized'].includes(action)) {
     window.dispatchEvent(new CustomEvent(action.replace('cloud-','myledger-') + '-request',{detail:data.lang}));
     return;
   }
-  if (action === 'reload-cloud') { await loadAccount(cloud); return; }
+  if (action === 'reload-cloud') {
+    const discardDraft = cloudState === 'conflict';
+    if (!discardDraft || window.confirm(t('discardDraft'))) await loadAccount(cloud,discardDraft);
+    return;
+  }
   if (action === 'close') { editor.close(); return; }
   if (action === 'language') {
     if (['loading','error','conflict'].includes(cloudState)) return;

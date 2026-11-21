@@ -13,11 +13,17 @@ The owner’s Users list and the Firestore ledger rules require both records to
 match. Invitations from earlier releases without a status are treated as
 pending until their first verified sign-in with this release.
 
-Removing access deletes the invitation, its matching user record, and any
-old signup link in one transaction. The ledger remains under its original UID.
-A verified sign-in with a different UID cannot use the old invitation. The app
-checks for inconsistent bindings and removes them when it has permission to do
-so. An owner can explicitly invite the email again.
+Removing access calls the Cloudflare Worker. It removes the invitation, its
+matching user record, and any old signup link in one Firestore commit, then
+deletes the bound Firebase Auth account. The ledger remains under its original
+UID. If Firebase Auth deletion needs a retry, access stays blocked and the
+owner can finish removal from the access list. See [Worker setup](worker/README.md).
+
+An open ledger stays editable during connectivity interruptions. Changes are
+saved in the browser and uploaded after access is rechecked against Firebase.
+When a non-owner loses access with unsynced changes, the app attempts to
+download a JSON backup and offers the same download on the sign-in screen in
+that tab. The backup uses the existing ledger import format.
 
 Firebase Auth can create a record before the email is verified. This record
 becomes a MyLedger user only after verified sign-in. The Firebase Auth client
