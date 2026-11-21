@@ -13,11 +13,12 @@ The owner’s Users list and the Firestore ledger rules require both records to
 match. Invitations from earlier releases without a status are treated as
 pending until their first verified sign-in with this release.
 
-Removing access calls the Cloudflare Worker. It removes the invitation, its
-matching user record, and any old signup link in one Firestore commit, then
-deletes the bound Firebase Auth account. The ledger remains under its original
-UID. If Firebase Auth deletion needs a retry, access stays blocked and the
-owner can finish removal from the access list. See [Worker setup](worker/README.md).
+Removing access deletes the invitation, its matching user record, and any
+old signup link in one Firestore transaction. Firestore rules immediately
+block ledger reads and writes, and real-time listeners close and sign out open
+MyLedger sessions when they receive the server update. Offline sessions
+recheck access before syncing. The Firebase Auth account and the ledger under
+its original UID are retained. An owner can explicitly re-invite the address.
 
 An open ledger stays editable during connectivity interruptions. Changes are
 saved in the browser and uploaded after access is rechecked against Firebase.
@@ -30,8 +31,7 @@ becomes a MyLedger user only after verified sign-in. The Firebase Auth client
 can inspect its current account. If deletion or disabling has already
 invalidated its credentials, it cannot write cleanup to Firestore. In that
 case, use MyLedger’s **Remove access** when deleting or disabling the account
-in the Firebase console. Automatic cleanup of accounts with no valid client
-session requires an administrative integration.
+in the Firebase console.
 
 Owner privileges come from administrator-assigned `accessOwners/{uid}`
 records. Verified owners also register `accessOwnerEmails/{lowercaseEmail}`

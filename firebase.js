@@ -12,9 +12,6 @@
 
   const googleClientId = '572111662694-ak1lh2f7tf8ief2d011vj4kb03k1apb5.apps.googleusercontent.com';
 
-  const revocationOrigin = "__MYLEDGER_REVOCATION_URL__";
-  const revocationEnabled = revocationOrigin.startsWith('https://');
-
   const messages = {
     ar: {
       createAccount:'إنشاء حساب', firstTime:'أول مرة؟', setPassword:'تعيين كلمة المرور', backToSignIn:'العودة لتسجيل الدخول', orEmail:'أو استخدم البريد الإلكتروني', signupDenied:'هذا البريد غير مصرح له من قبل المالك.', useSignup:'تحقّق من كلمة المرور، أو اضغط إنشاء حساب إذا كانت هذه أول مرة. إذا سبق ودخلت بحساب Google، استخدمه مجددًا.', signupExisting:'هذا الحساب موجود. سجّل الدخول بكلمة المرور أو باستخدام Google.',
@@ -26,9 +23,6 @@
       waiting:'قيد الانتظار', active:'نشط',
       waitingDetail:'بانتظار التحقق من البريد أو إكمال التسجيل.',
       activeDetail:'تم التحقق من البريد والموافقة على الوصول.',
-      finishingRevocation:'إكمال إزالة الحساب',
-      revocationPending:'تم إيقاف الوصول. لم يُحذف حساب تسجيل الدخول بعد.',
-      revocationUnavailable:'خدمة إزالة الحساب غير مهيأة.',
       offlineSignIn:'اتصل بالإنترنت لتسجيل الدخول.',
       downloadUnsynced:'تنزيل نسخة احتياطية من التغييرات غير المتزامنة',
       resetPassword:'إعادة تعيين كلمة المرور', resetEmail:'أدخل بريدك الإلكتروني أولاً.',
@@ -56,9 +50,6 @@
       waiting:'Pending', active:'Active',
       waitingDetail:'Awaiting email verification or completion of registration.',
       activeDetail:'Email verified and access approved.',
-      finishingRevocation:'Finish removing account',
-      revocationPending:'Access is blocked. The sign-in account has yet to be removed.',
-      revocationUnavailable:'The account removal service is not configured.',
       offlineSignIn:'Connect to the internet to sign in.',
       downloadUnsynced:'Download backup of unsynced changes',
       resetPassword:'Reset password', resetEmail:'Enter your email address first.',
@@ -799,8 +790,9 @@
         const grant = store.doc(database,'accessInvites',recipient);
         await store.runTransaction(database,async tx => {
           if ((await tx.get(grant)).exists()) return;
+          // Clear legacy removal records when an owner explicitly re-invites an address.
           const revocation = store.doc(database,'accessRevocations',recipient);
-          if ((await tx.get(revocation)).exists()) throw new Error('Account removal pending');
+          if ((await tx.get(revocation)).exists()) tx.delete(revocation);
           tx.set(grant,{allowed:true,status:'pending'});
         });
         status.textContent = copy.invited + ' ' + recipient;
@@ -834,28 +826,12 @@
     let stops = [];
     let invites;
     let users;
-    let revocations;
-
-    async function removeAccess(email) {
-      if (!revocationEnabled) throw new Error('revocation-unavailable');
-      const token = await access.auth.currentUser.getIdToken(true);
-      if (ownerAccess !== access) throw new Error('Account changed');
-      const response = await fetch(revocationOrigin + '/revoke',{
-        method:'POST',
-        redirect:'error',
-        headers:{Authorization:'Bearer ' + token,'Content-Type':'application/json'},
-        body:JSON.stringify({email})
-      });
-      const result = await response.json();
-      if (!response.ok || typeof result.accountDeleted !== 'boolean') throw new Error('Revocation failed');
-    }
-
     function stopList() {
       stops.forEach(stop => stop());
       stops = [];
     }
 
-    function section(title,recipients,stateLabel,stateDetail,removing=false) {
+    function section(title,recipients,stateLabel,stateDetail) {
       const block = document.createElement('section');
       const heading = document.createElement('h3');
       heading.textContent = title;
@@ -881,7 +857,7 @@
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'btn revoke-access';
-        remove.textContent = removing ? copy.finishingRevocation : copy.revoke;
+        remove.textContent = copy.revoke;
         remove.disabled = busy.has(recipient);
         remove.setAttribute('aria-label',remove.textContent + ' · ' + recipient);
         remove.addEventListener('click',async () => {
@@ -890,14 +866,13 @@
           busy.add(recipient);
           remove.disabled = true;
           try {
-            await removeAccess(recipient);
+            await revokeGrant(access,recipient,() => true);
             if (stillOpen()) {
               status.textContent = copy.revoked + ' ' + recipient;
               dialog.querySelector('form[method="dialog"] button')?.focus();
             }
-          } catch (error) {
-            if (stillOpen()) status.textContent = error.message === 'revocation-unavailable'
-              ? copy.revocationUnavailable : copy.revokeError;
+          } catch {
+            if (stillOpen()) status.textContent = copy.revokeError;
           } finally {
             busy.delete(recipient);
             if (stillOpen()) renderList();
@@ -911,12 +886,12 @@
     }
 
     function renderList() {
-      if (!stillOpen() || !invites || !users || !revocations) return;
+      if (!stillOpen() || !invites || !users) return;
       const pending = [];
       const active = [];
       for (const entry of invites.docs) {
         const grant = entry.data();
-        if (grant.allowed !== true || revocations.has(entry.id)) continue;
+        if (grant.allowed !== true) continue;
         if (grant.status !== 'approved') {
           pending.push(entry.id);
         } else if (users.get(grant.uid) === entry.id) {
@@ -937,22 +912,18 @@
         section(copy.invitations,pending,copy.waiting,copy.waitingDetail),
         section(copy.users,active,copy.active,copy.activeDetail)
       );
-      if (revocations.size) {
-        results.append(section(copy.revoke,[...revocations],copy.finishingRevocation,copy.revocationPending,true));
-      }
     }
 
     function loadAuthorized() {
       stopList();
       invites = users = undefined;
-      revocations = revocationEnabled ? undefined : new Set();
       status.textContent = copy.listLoading;
       retry.hidden = true;
       const watch = (collection,receive) =>
         store.onSnapshot(store.collection(database,collection),{includeMetadataChanges:true},snapshot => {
           if (!stillOpen() || snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
           receive(snapshot);
-          if (invites && users && revocations && status.textContent === copy.listLoading) status.textContent = '';
+          if (invites && users && status.textContent === copy.listLoading) status.textContent = '';
           renderList();
         },() => {
           if (!stillOpen()) return;
@@ -964,9 +935,6 @@
         watch('accessInvites',snapshot => { invites = snapshot; }),
         watch('users',snapshot => { users = new Map(snapshot.docs.map(doc => [doc.id,doc.data().email])); })
       ];
-      if (revocationEnabled) {
-        stops.push(watch('accessRevocations',snapshot => { revocations = new Set(snapshot.docs.map(doc => doc.id)); }));
-      }
     }
 
     retry.addEventListener('click',loadAuthorized);
