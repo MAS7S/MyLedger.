@@ -140,30 +140,47 @@ async function revoke(api, owner, email) {
   if (!pending) {
     const grant = await api.get('accessInvites', email);
     if (!grant) {
-      // A simultaneous request may have removed the grant and created the retry record.
       pending = await api.get('accessRevocations', email);
       if (!pending) throw new RequestError(404, 'grant-missing');
     } else {
       if (grant.fields?.allowed?.booleanValue !== true) throw new RequestError(404, 'grant-missing');
-      await protectOwner(api, await api.findUser({ email: [email] }), owner);
+      const boundUid = grant.fields?.uid?.stringValue;
+      if (boundUid !== undefined && !validUid(boundUid)) throw new Error('Invalid invitation UID');
+      const target = await api.findUser(boundUid ? { localId: [boundUid] } : { email: [email] });
+      await protectOwner(api, target, owner);
+      if (target && (boundUid ? target.localId !== boundUid : normalizeEmail(target.email) !== email)) {
+        throw new RequestError(409, 'account-changed');
+      }
+      const uid = boundUid ?? target?.localId ?? '';
       const writes = [
         { delete: grant.name, currentDocument: { updateTime: grant.updateTime } },
-        { update: { name: pendingName, fields: {} }, currentDocument: { exists: false } }
+        { update: { name: pendingName, fields: { uid: { stringValue: uid } } }, currentDocument: { exists: false } }
       ];
+      if (uid) {
+        const profile = await api.get('users', uid);
+        if (profile?.fields?.email?.stringValue === email) {
+          writes.push({ delete: profile.name, currentDocument: { updateTime: profile.updateTime } });
+        }
+      }
       const oldCode = grant.fields?.signupCode?.stringValue;
       if (/^[0-9a-f]{32}$/.test(oldCode || '')) writes.push({ delete: api.name('signupInvites', oldCode) });
       await api.commit(writes);
       pending = await api.get('accessRevocations', email);
-      if (!pending) throw new RequestError(409, 'retry');
+      if (!pending || pending.fields?.uid?.stringValue !== uid) throw new RequestError(409, 'retry');
     }
   }
 
-  // Bind retries to the original UID. If the account no longer exists, never delete a replacement.
   let uid = pending.fields?.uid?.stringValue;
   if (uid === undefined) {
+    // Older Workers wrote the retry record before recording a UID.
     const target = await api.findUser({ email: [email] });
     await protectOwner(api, target, owner);
-    if (target && normalizeEmail(target.email) !== email) throw new Error('Email lookup mismatch');
+    if (target && (normalizeEmail(target.email) !== email
+        || !Number.isFinite(Number(target.createdAt)) || !target.createdAt
+        || Number(target.createdAt) > Date.parse(pending.createTime)
+        || !Number.isFinite(Date.parse(pending.createTime)))) {
+      throw new RequestError(409, 'account-changed');
+    }
     uid = target?.localId ?? '';
     await api.commit([{
       update: { name: pendingName, fields: { uid: { stringValue: uid } } },
@@ -182,11 +199,8 @@ async function revoke(api, owner, email) {
         throw new RequestError(409, 'account-changed');
       }
       await api.deleteUser(uid);
+      if (await api.findUser({ localId: [uid] })) throw new RequestError(409, 'account-still-present');
     }
-  }
-  if (await api.findUser({ email: [email] })) {
-    // Keep the pending record until Firebase confirms the revoked email is absent.
-    throw new RequestError(409, 'account-still-present');
   }
   await api.commit([{ delete: pendingName, currentDocument: { updateTime: pending.updateTime } }]);
   return { accountDeleted: Boolean(uid) };

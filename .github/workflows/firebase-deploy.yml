@@ -26,6 +26,7 @@ jobs:
           node-version: '24'
       - name: Deploy Firebase resources
         env:
+          MYLEDGER_REVOCATION_URL: ${{ vars.MYLEDGER_REVOCATION_URL }}
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
           if [ -z "$FIREBASE_TOKEN" ]; then
