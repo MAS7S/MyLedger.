@@ -3,7 +3,7 @@
 (() => {
   const config = {
     apiKey: 'AIzaSyD88lP9j0jCfoOs91fuaHn2AipUSHYe6Gk',
-    authDomain: 'my-ledger-8d0b3.firebaseapp.com',
+    authDomain: 'my-ledger-8d0b3.web.app',
     projectId: 'my-ledger-8d0b3',
     storageBucket: 'my-ledger-8d0b3.firebasestorage.app',
     messagingSenderId: '572111662694',
